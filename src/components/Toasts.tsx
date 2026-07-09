@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Checkin, Meetup, Squad, SquadMember } from '../lib/social'
+import type { BingoClaim, Checkin, Meetup, Squad, SquadMember } from '../lib/social'
 import { formatMeetupTime } from '../lib/points'
+import { completedLines, squareStatuses } from '../data/bingo'
 
 const DISMISS_MS = 5_000
 const MAX_VISIBLE = 4
 
-type ToastKind = 'checkin' | 'squad' | 'meetup'
+type ToastKind = 'checkin' | 'squad' | 'meetup' | 'bingo'
 type Toast = { id: string; text: string; kind: ToastKind }
 
 // Ephemeral, self-dismissing notices fired when *other* people do something on
@@ -19,12 +20,14 @@ export default function Toasts({
   members = [],
   squads = [],
   meetups = [],
+  bingoClaims = [],
   myId,
 }: {
   checkins: Checkin[]
   members?: SquadMember[]
   squads?: Squad[]
   meetups?: Meetup[]
+  bingoClaims?: BingoClaim[]
   myId: string
 }) {
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -113,6 +116,30 @@ export default function Toasts({
     push(fresh)
   }, [meetups, myId])
 
+  // Bingo line / blackout celebrations. Crew-wide — unlike the other toasts these
+  // fire for *everyone* (including whoever completed the line). Keyed by line id
+  // so each completion toasts once; a line already complete before mount is
+  // marked seen without toasting (its completion time predates us).
+  useEffect(() => {
+    const statuses = squareStatuses(checkins, bingoClaims)
+    const fresh: Toast[] = []
+    for (const line of completedLines(statuses)) {
+      const key = `b:${line.id}`
+      if (seen.current.has(key)) continue
+      seen.current.add(key)
+      if (new Date(line.at).getTime() < mountedAt.current) continue // backlog
+      fresh.push({
+        id: key,
+        kind: 'bingo',
+        text:
+          line.id === 'blackout'
+            ? 'BLACKOUT! The whole card is complete 🎉'
+            : `BINGO! ${line.label} complete 🎉`,
+      })
+    }
+    push(fresh)
+  }, [checkins, bingoClaims])
+
   useEffect(() => {
     const list = timers.current
     return () => list.forEach((t) => window.clearTimeout(t))
@@ -130,7 +157,7 @@ export default function Toasts({
           onClick={() => dismiss(t.id)}
         >
           <span className="toast-ico" aria-hidden>
-            {t.kind === 'squad' ? '🚩' : t.kind === 'meetup' ? '🕐' : '◎'}
+            {t.kind === 'squad' ? '🚩' : t.kind === 'meetup' ? '🕐' : t.kind === 'bingo' ? '🎉' : '◎'}
           </span>
           <span className="toast-text">{t.text}</span>
         </button>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useLiveLocations } from './lib/useLiveLocations'
-import { useCheckins, useMeetups, usePhotos, useSpots, useSquads, useVotes } from './lib/useSocial'
+import { useBingo, useCheckins, useMeetups, usePhotos, useSpots, useSquads, useVotes } from './lib/useSocial'
 import Hero from './components/Hero'
 import MapView, { type MapFocus } from './components/MapView'
 import FoodView from './components/FoodView'
@@ -51,6 +51,9 @@ export default function App() {
   // Meetups (Phase 7): shared by the map (pins + banner + create) and the
   // creation toasts — one realtime subscription each for meetups + RSVPs.
   const meetups = useMeetups()
+  // Trip bingo (Phase 9): the crew-wide claim stream feeds the Scores card and
+  // the line-completion celebration toasts — one subscription for both.
+  const bingo = useBingo()
   // The squad create/join sheet, opened from the Map legend or the Scores tab.
   const [squadsOpen, setSquadsOpen] = useState(false)
 
@@ -154,6 +157,8 @@ export default function App() {
             photos={photos.photos}
             myId={live.myId}
             squads={squads}
+            bingo={bingo}
+            live={live}
             onManageSquads={() => setSquadsOpen(true)}
           />
         )}
@@ -192,6 +197,7 @@ export default function App() {
           members={squads.members}
           squads={squads.squads}
           meetups={meetups.meetups}
+          bingoClaims={bingo.claims}
           myId={live.myId}
         />
       )}

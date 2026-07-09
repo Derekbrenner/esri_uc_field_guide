@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
 import type { Checkin, Photo } from '../lib/social'
-import { useSquads } from '../lib/useSocial'
+import { useBingo, useSquads } from '../lib/useSocial'
 import { badgesFor, scoreFor, squadScore } from '../lib/points'
-import { colorForId } from '../lib/useLiveLocations'
+import { colorForId, type LiveState } from '../lib/useLiveLocations'
+import BingoCard from './BingoCard'
 
 type BoardTab = 'individual' | 'squads'
 type SquadsApi = ReturnType<typeof useSquads>
+type BingoApi = ReturnType<typeof useBingo>
 
 function initials(name: string | null | undefined): string {
   return (name || '?').trim().slice(0, 2).toUpperCase() || '?'
@@ -19,12 +21,16 @@ export default function ScoresView({
   photos,
   myId,
   squads,
+  bingo,
+  live,
   onManageSquads,
 }: {
   checkins: Checkin[]
   photos: Photo[]
   myId: string
   squads: SquadsApi
+  bingo: BingoApi
+  live: LiveState
   onManageSquads: () => void
 }) {
   const [tab, setTab] = useState<BoardTab>('individual')
@@ -179,6 +185,8 @@ export default function ScoresView({
             <p className="scores-foot">Squad points count today’s check-ins made while in the squad.</p>
           </>
         )}
+
+        <BingoCard checkins={checkins} bingo={bingo} live={live} />
       </div>
     </section>
   )

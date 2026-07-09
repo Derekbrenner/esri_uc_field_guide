@@ -50,6 +50,11 @@ import {
   updateScheduleItem,
   deleteScheduleItem,
   subscribeScheduleItems,
+  // bingo
+  fetchBingoClaims,
+  addBingoClaim,
+  removeBingoClaim,
+  subscribeBingoClaims,
   type Spot,
   type Vote,
   type Checkin,
@@ -60,6 +65,7 @@ import {
   type MeetupRsvp,
   type AttendeeRow,
   type ScheduleItemRow,
+  type BingoClaim,
   type Identity,
 } from './social'
 
@@ -676,4 +682,57 @@ export function useScheduleItems() {
   )
 
   return { items: rows, addItem, editItem, removeItem, configured: isSupabaseConfigured }
+}
+
+// --- Bingo (Phase 9) -------------------------------------------------------
+
+// The shared trip-bingo card. Challenge squares are claimed here (tap-to-claim,
+// tap-again-to-unclaim your own row); spot squares complete from the check-in
+// stream, so they aren't touched here. Optimistic like useVotes: reflect the tap
+// immediately, reconcile against the server on the next fetch.
+export function useBingo() {
+  const { rows, setRows, refresh } = useRealtimeList<BingoClaim>(fetchBingoClaims, subscribeBingoClaims)
+  const rowsRef = useRef<BingoClaim[]>(rows)
+  rowsRef.current = rows
+
+  const claimantsFor = useCallback(
+    (squareId: string) => rows.filter((r) => r.square_id === squareId),
+    [rows],
+  )
+
+  const minedFor = useCallback(
+    (squareId: string, deviceId: string) =>
+      rows.some((r) => r.square_id === squareId && r.device_id === deviceId),
+    [rows],
+  )
+
+  // Toggle my claim on a challenge square. Adds if I haven't claimed it, removes
+  // my row if I have — the square stays completed while anyone else still holds a
+  // claim (crew-wide card).
+  const toggleClaim = useCallback(
+    (squareId: string, id: Identity) => {
+      if (!isSupabaseConfigured) return
+      const current = rowsRef.current
+      const had = current.some((r) => r.square_id === squareId && r.device_id === id.deviceId)
+
+      if (had) {
+        setRows(current.filter((r) => !(r.square_id === squareId && r.device_id === id.deviceId)))
+      } else {
+        setRows([
+          ...current,
+          { square_id: squareId, device_id: id.deviceId, name: id.name, created_at: new Date().toISOString() },
+        ])
+      }
+
+      const run = async () => {
+        if (had) await removeBingoClaim(squareId, id.deviceId)
+        else await addBingoClaim(squareId, id)
+        refresh()
+      }
+      run()
+    },
+    [setRows, refresh],
+  )
+
+  return { claims: rows, claimantsFor, minedFor, toggleClaim, configured: isSupabaseConfigured }
 }
