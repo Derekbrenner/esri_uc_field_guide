@@ -1,12 +1,25 @@
 import { useState } from 'react'
 import type { Tab } from '../App'
-import { categoryColor, categoryOrder, venues, type VenueCategory } from '../data/venues'
+import { categoryColor, categoryOrder, venueKey, venues, type VenueCategory } from '../data/venues'
+import type { LiveState } from '../lib/useLiveLocations'
+import { useVoteGate, type VotesApi } from '../lib/useSocial'
+import VoteButton from './VoteButton'
+import NamePrompt from './NamePrompt'
 
 const FOOD_CATS = categoryOrder.filter((c) => c !== 'Landmark')
 
-export default function FoodView({ onNav }: { onNav: (t: Tab) => void }) {
+export default function FoodView({
+  onNav,
+  live,
+  votes,
+}: {
+  onNav: (t: Tab) => void
+  live: LiveState
+  votes: VotesApi
+}) {
   const [filter, setFilter] = useState<VenueCategory | 'All'>('All')
   const cats = filter === 'All' ? FOOD_CATS : [filter]
+  const gate = useVoteGate(votes, live)
 
   return (
     <section className="foodview">
@@ -46,34 +59,46 @@ export default function FoodView({ onNav }: { onNav: (t: Tab) => void }) {
               <span className="mono food-group-count">{list.length}</span>
             </div>
             <div className="food-grid">
-              {list.map((v) => (
-                <article key={v.name} className="foodcard" style={{ ['--accent' as string]: categoryColor[v.category] }}>
-                  <div className="foodcard-top">
-                    <h3>{v.name}</h3>
-                    {v.area && <span className="foodcard-area mono">{v.area}</span>}
-                  </div>
-                  <p className="foodcard-notes">{v.notes}</p>
-                  {v.schedule && <p className="foodcard-sched">📌 {v.schedule}</p>}
-                  <div className="foodcard-foot">
-                    {v.tags && v.tags.length > 0 && (
-                      <span className="foodcard-tags">
-                        {v.tags.map((t) => (
-                          <span key={t} className="tag" style={{ ['--tag' as string]: categoryColor[t] }}>
-                            also {t.toLowerCase()}
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                    <button className="foodcard-map" onClick={() => onNav('Map')}>
-                      Show on map →
-                    </button>
-                  </div>
-                </article>
-              ))}
+              {list.map((v) => {
+                const key = venueKey(v)
+                return (
+                  <article key={v.name} className="foodcard" style={{ ['--accent' as string]: categoryColor[v.category] }}>
+                    <div className="foodcard-top">
+                      <h3>{v.name}</h3>
+                      {v.area && <span className="foodcard-area mono">{v.area}</span>}
+                    </div>
+                    <p className="foodcard-notes">{v.notes}</p>
+                    {v.schedule && <p className="foodcard-sched">📌 {v.schedule}</p>}
+                    <div className="foodcard-foot">
+                      {votes.configured && (
+                        <VoteButton
+                          count={votes.countFor(key)}
+                          active={votes.hasMine(key)}
+                          onVote={() => gate.request(key)}
+                        />
+                      )}
+                      {v.tags && v.tags.length > 0 && (
+                        <span className="foodcard-tags">
+                          {v.tags.map((t) => (
+                            <span key={t} className="tag" style={{ ['--tag' as string]: categoryColor[t] }}>
+                              also {t.toLowerCase()}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                      <button className="foodcard-map" onClick={() => onNav('Map')}>
+                        Show on map →
+                      </button>
+                    </div>
+                  </article>
+                )
+              })}
             </div>
           </div>
         )
       })}
+
+      <NamePrompt open={gate.promptOpen} onSave={gate.resolve} onCancel={gate.cancel} />
     </section>
   )
 }

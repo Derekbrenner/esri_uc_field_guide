@@ -25,6 +25,12 @@ if (isSupabaseConfigured) {
 // isn't configured — every consumer checks isSupabaseConfigured first.
 export const supabase: SupabaseClient | null = client
 
+// Function accessor for the same client, used by the votes modules. Returns
+// null when Supabase isn't configured, so every feature can no-op.
+export function getSupabase(): SupabaseClient | null {
+  return client
+}
+
 export type LiveLocation = {
   id: string // stable per-device id (localStorage)
   name: string

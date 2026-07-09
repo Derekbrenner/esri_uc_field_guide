@@ -1,5 +1,6 @@
 import { useEffect, useState, type ComponentType } from 'react'
 import { useLiveLocations } from './lib/useLiveLocations'
+import { useVotes } from './lib/useSocial'
 import Hero from './components/Hero'
 import MapView from './components/MapView'
 import FoodView from './components/FoodView'
@@ -22,6 +23,8 @@ const TAB_META: Record<Tab, { short: string; Icon: ComponentType<{ className?: s
 export default function App() {
   const [tab, setTab] = useState<Tab>('Guide')
   const live = useLiveLocations()
+  // Shared across the map + food views so the subscription persists across tabs.
+  const votes = useVotes()
 
   // Let the map deep-link via hash (#map) so "Live map" buttons can jump there.
   useEffect(() => {
@@ -73,8 +76,8 @@ export default function App() {
 
       <main id="main" className="main">
         {tab === 'Guide' && <Hero onNav={go} live={live} />}
-        {tab === 'Map' && <MapView live={live} />}
-        {tab === 'Food & Drink' && <FoodView onNav={go} />}
+        {tab === 'Map' && <MapView live={live} votes={votes} />}
+        {tab === 'Food & Drink' && <FoodView onNav={go} live={live} votes={votes} />}
         {tab === 'Schedule' && <ScheduleView />}
         {tab === 'Crew' && <CrewView />}
       </main>

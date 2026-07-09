@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   isSupabaseConfigured,
   // spots
@@ -144,46 +144,164 @@ export function useSpots() {
 
 // --- Votes -----------------------------------------------------------------
 
-export function useVotes() {
+// localStorage keys shared with useLiveLocations (device identity + name).
+const VOTE_DEVICE_ID_KEY = 'sdfg.deviceId'
+const VOTE_NAME_KEY = 'sdfg.name'
+
+function voterDeviceId(): string {
+  let id = localStorage.getItem(VOTE_DEVICE_ID_KEY)
+  if (!id) {
+    id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : 'id-' + Math.random().toString(36).slice(2)
+    localStorage.setItem(VOTE_DEVICE_ID_KEY, id)
+  }
+  return id
+}
+
+// Self-contained voting surface consumed by the map / food views (Phase 2).
+// Identity is derived internally from the shared localStorage triple, so the
+// UI just calls toggle(spotKey).
+export type VotesApi = {
+  configured: boolean
+  countFor: (spotKey: string) => number
+  hasMine: (spotKey: string) => boolean
+  toggle: (spotKey: string) => void
+  // Spot keys with ≥1 vote, most-voted first — drives the "Top voted" lens.
+  topKeys: string[]
+  total: number
+}
+
+export function useVotes(): VotesApi {
+  const myId = useRef<string>(isSupabaseConfigured ? voterDeviceId() : '').current
   const { rows, setRows, refresh } = useRealtimeList<Vote>(fetchVotes, subscribeVotes)
+  const rowsRef = useRef<Vote[]>(rows)
+  rowsRef.current = rows
 
-  const countFor = useCallback(
-    (spotKey: string) => rows.reduce((n, v) => (v.spot_key === spotKey ? n + 1 : n), 0),
-    [rows],
+  const counts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of rows) m.set(r.spot_key, (m.get(r.spot_key) ?? 0) + 1)
+    return m
+  }, [rows])
+
+  const mine = useMemo(() => {
+    const s = new Set<string>()
+    for (const r of rows) if (r.device_id === myId) s.add(r.spot_key)
+    return s
+  }, [rows, myId])
+
+  const countFor = useCallback((spotKey: string) => counts.get(spotKey) ?? 0, [counts])
+  const hasMine = useCallback((spotKey: string) => mine.has(spotKey), [mine])
+
+  const topKeys = useMemo(
+    () =>
+      [...counts.entries()]
+        .filter(([, n]) => n > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k]) => k),
+    [counts],
   )
 
-  const hasVoted = useCallback(
-    (spotKey: string, deviceId: string) =>
-      rows.some((v) => v.spot_key === spotKey && v.device_id === deviceId),
-    [rows],
-  )
+  const toggle = useCallback(
+    (spotKey: string) => {
+      if (!isSupabaseConfigured) return
+      const current = rowsRef.current
+      const had = current.some((r) => r.spot_key === spotKey && r.device_id === myId)
+      const name = (localStorage.getItem(VOTE_NAME_KEY) || 'Someone').trim()
 
-  const toggleVote = useCallback(
-    async (spotKey: string, id: Identity): Promise<MutationResult> => {
-      const voted = rows.some((v) => v.spot_key === spotKey && v.device_id === id.deviceId)
-      if (voted) {
-        setRows((prev) =>
-          prev.filter((v) => !(v.spot_key === spotKey && v.device_id === id.deviceId)),
-        )
-        const { error } = await removeVote(spotKey, id.deviceId)
-        if (error) refresh()
-        return { error }
+      // Optimistic: reflect the tap immediately, reconcile from the server after.
+      if (had) {
+        setRows(current.filter((r) => !(r.spot_key === spotKey && r.device_id === myId)))
+      } else {
+        setRows([
+          ...current,
+          { spot_key: spotKey, device_id: myId, name, created_at: new Date().toISOString() },
+        ])
       }
-      const optimistic: Vote = {
-        spot_key: spotKey,
-        device_id: id.deviceId,
-        name: id.name,
-        created_at: new Date().toISOString(),
+
+      const run = async () => {
+        if (had) {
+          await removeVote(spotKey, myId)
+        } else {
+          await addVote(spotKey, { deviceId: myId, name })
+        }
+        // Reconcile with the server once the write lands.
+        refresh()
       }
-      setRows((prev) => [...prev, optimistic])
-      const { error } = await addVote(spotKey, id)
-      if (error) refresh()
-      return { error }
+      run()
     },
-    [rows, setRows, refresh],
+    [myId, refresh, setRows],
   )
 
-  return { votes: rows, countFor, hasVoted, toggleVote, configured: isSupabaseConfigured }
+  const inert: VotesApi = {
+    configured: false,
+    countFor: () => 0,
+    hasMine: () => false,
+    toggle: () => {},
+    topKeys: [],
+    total: 0,
+  }
+
+  if (!isSupabaseConfigured) return inert
+
+  return {
+    configured: true,
+    countFor,
+    hasMine,
+    toggle,
+    topKeys,
+    total: rows.length,
+  }
+}
+
+// A small gate around voting: if the user hasn't set a display name yet, hold
+// the tap and open the name picker first, then record the vote once they save.
+// Reuses the existing identity (localStorage name via `live.setName`).
+export type VoteGate = {
+  request: (spotKey: string) => void
+  promptOpen: boolean
+  resolve: (name: string) => void
+  cancel: () => void
+}
+
+export function useVoteGate(
+  votes: VotesApi,
+  live: { name: string; setName: (name: string) => void },
+): VoteGate {
+  const [promptOpen, setPromptOpen] = useState(false)
+  const pending = useRef<string | null>(null)
+
+  const request = useCallback(
+    (spotKey: string) => {
+      if (!votes.configured) return
+      if (live.name && live.name.trim()) {
+        votes.toggle(spotKey)
+        return
+      }
+      pending.current = spotKey
+      setPromptOpen(true)
+    },
+    [votes, live.name],
+  )
+
+  const resolve = useCallback(
+    (name: string) => {
+      live.setName(name) // writes localStorage synchronously
+      const key = pending.current
+      pending.current = null
+      setPromptOpen(false)
+      if (key) votes.toggle(key)
+    },
+    [votes, live],
+  )
+
+  const cancel = useCallback(() => {
+    pending.current = null
+    setPromptOpen(false)
+  }, [])
+
+  return { request, promptOpen, resolve, cancel }
 }
 
 // --- Check-ins -------------------------------------------------------------

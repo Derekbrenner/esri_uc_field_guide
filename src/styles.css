@@ -371,6 +371,16 @@ a { color: var(--kelp); }
 .chip--on .chip-dot { opacity: 1; box-shadow: 0 0 8px var(--chip); }
 .chip--all { --chip: var(--paper); }
 
+/* "Top voted" lens chip */
+.chip--fav { --chip: var(--coral); }
+.chip-heart { color: var(--coral); font-size: 13px; line-height: 1; }
+.chip--fav.chip--on .chip-heart { text-shadow: 0 0 8px color-mix(in srgb, var(--coral) 70%, transparent); }
+.chip-fav-count {
+  font-size: 10.5px; color: var(--coral);
+  background: color-mix(in srgb, var(--coral) 16%, transparent);
+  padding: 0 6px; border-radius: 999px;
+}
+
 .mapview-stage {
   position: relative;
   max-width: var(--maxw);
@@ -390,8 +400,9 @@ a { color: var(--kelp); }
 /* venue pins */
 .pin-wrap { background: none !important; border: none !important; }
 .pin {
+  position: relative;
   display: block;
-  width: 16px; height: 16px;
+  width: var(--pinsz, 16px); height: var(--pinsz, 16px);
   border-radius: 50%;
   background: var(--pin);
   border: 2.5px solid var(--abyss);
@@ -400,8 +411,44 @@ a { color: var(--kelp); }
 .pin--landmark {
   border-radius: 3px;
   transform: rotate(45deg);
-  width: 15px; height: 15px;
 }
+
+/* voted pins: glow + pulse ring scale with the (capped) vote count */
+.pin--voted {
+  --pinv: 0;
+  box-shadow:
+    0 0 0 1.5px var(--pin),
+    0 0 calc(4px + var(--pinv) * 3px) calc(var(--pinv) * 1px)
+      color-mix(in srgb, var(--pin) 60%, transparent),
+    0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.pin--voted::after {
+  content: '';
+  position: absolute; inset: -1px;
+  border-radius: inherit;
+  border: 1.5px solid var(--pin);
+  opacity: 0.55;
+  animation: favring 2.6s ease-out infinite;
+}
+.pin--landmark.pin--voted::after { border-radius: 3px; }
+@keyframes favring {
+  0% { transform: scale(1); opacity: 0.5; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+.pin-votes {
+  position: absolute;
+  top: -8px; right: -10px;
+  min-width: 15px; height: 15px;
+  padding: 0 3px;
+  display: grid; place-items: center;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  color: #08222b;
+  background: var(--pin);
+  border: 1.5px solid var(--abyss);
+  border-radius: 999px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+.pin--landmark .pin-votes { transform: rotate(-45deg); }
 
 /* live dots */
 .live-wrap { background: none !important; border: none !important; }
@@ -476,7 +523,41 @@ a { color: var(--kelp); }
 .pop-name { font-family: var(--display); font-weight: 700; font-size: 16px; margin-bottom: 3px; }
 .pop-notes { font-size: 13px; color: var(--paper-dim); line-height: 1.4; }
 .pop-sched { font-size: 12px; color: var(--coral); margin-top: 6px; }
-.pop-dir { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 600; color: var(--ping) !important; }
+.pop-actions {
+  display: flex; align-items: center; gap: 12px;
+  margin-top: 10px; flex-wrap: wrap;
+}
+.pop-dir { display: inline-block; font-size: 13px; font-weight: 600; color: var(--ping) !important; }
+
+/* ---------- Vote control (♥ + count) ---------- */
+.votebtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line-strong);
+  background: var(--chart);
+  color: var(--paper-dim);
+  border-radius: 999px;
+  padding: 7px 13px;
+  min-height: 36px;
+  font-size: 13px; font-weight: 600;
+  transition: background 0.14s, color 0.14s, border-color 0.14s, transform 0.12s;
+}
+.votebtn:hover {
+  color: var(--paper);
+  border-color: color-mix(in srgb, var(--coral) 50%, var(--line-strong));
+}
+.votebtn:active { transform: translateY(1px); }
+.votebtn-heart { font-size: 15px; line-height: 1; color: var(--paper-faint); transition: color 0.14s, transform 0.14s; }
+.votebtn-count { font-size: 12.5px; min-width: 8px; text-align: left; }
+.votebtn--on {
+  color: var(--paper);
+  border-color: color-mix(in srgb, var(--coral) 60%, transparent);
+  background: color-mix(in srgb, var(--coral) 16%, var(--chart));
+}
+.votebtn--on .votebtn-heart { color: var(--coral); text-shadow: 0 0 10px color-mix(in srgb, var(--coral) 70%, transparent); }
+.votebtn:active .votebtn-heart { transform: scale(1.35); }
+/* the popup twin sits on the darker popup surface */
+.votebtn--pop { background: var(--abyss); }
+.votebtn--pop.votebtn--on { background: color-mix(in srgb, var(--coral) 20%, var(--abyss)); }
 
 /* ---------- Share panel ---------- */
 .share {
@@ -708,6 +789,37 @@ a { color: var(--kelp); }
 }
 
 /* ============================================================
+   NAME PROMPT (vote name-gate)
+   ============================================================ */
+.nameprompt-backdrop {
+  position: fixed; inset: 0;
+  z-index: 3000;
+  display: grid; place-items: center;
+  padding: 20px;
+  background: rgba(6, 18, 24, 0.62);
+  backdrop-filter: blur(4px);
+  animation: fadein 0.16s ease-out;
+}
+.nameprompt {
+  width: min(400px, 100%);
+  background: var(--chart-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.6);
+  padding: 22px 22px 20px;
+  animation: popin 0.18s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.nameprompt .section-eyebrow { margin-bottom: 8px; }
+.nameprompt-title { font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: -0.01em; margin: 0 0 8px; }
+.nameprompt-lede { font-size: 13.5px; color: var(--paper-dim); line-height: 1.5; margin: 0 0 4px; }
+.nameprompt .share-label { margin-top: 14px; }
+.nameprompt-actions { display: flex; gap: 10px; margin-top: 16px; }
+.nameprompt-actions .btn { flex: 1; justify-content: center; }
+.nameprompt-actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+@keyframes popin { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+/* ============================================================
    RESPONSIVE
    ============================================================ */
 @media (max-width: 820px) {
@@ -772,10 +884,29 @@ a { color: var(--kelp); }
 @media (max-width: 560px) {
   .brand-sub { display: none; }
   .hero-inner { padding-left: 16px; padding-right: 16px; }
-  .hero-cards { grid-template-columns: 1fr; padding-left: 16px; padding-right: 16px; }
   .hero-actions .btn { flex: 1 1 auto; justify-content: center; }
-  .view-head { padding: 26px 16px 16px; }
-  .days, .food-group, .crew-groups, .tips { padding-left: 16px; padding-right: 16px; }
+
+  .hero-cards { grid-template-columns: 1fr; }
+  .share { right: 14px; left: 14px; top: 12px; width: auto; }
+  .mapview-stage { padding: 0 14px; }
+  .leaflet-stage { height: 66vh; }
+  .view-head { padding: 28px 14px 16px; }
+  .days, .food-group, .crew-groups, .tips, .hero-cards { padding-left: 14px; padding-right: 14px; }
+
+  /* bigger tap targets for night-time thumbs */
+  .votebtn { min-height: 40px; padding: 8px 15px; font-size: 14px; }
+  .votebtn-heart { font-size: 16px; }
+
+  /* name picker becomes a bottom sheet */
+  .nameprompt-backdrop { place-items: end center; padding: 0; }
+  .nameprompt {
+    width: 100%;
+    border-radius: var(--radius) var(--radius) 0 0;
+    padding: 22px 18px calc(22px + env(safe-area-inset-bottom, 0px));
+    animation: sheetup 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+  .nameprompt-actions .btn { min-height: 46px; }
+  @keyframes sheetup { from { transform: translateY(100%); } to { transform: none; } }
 }
 
 @media (prefers-reduced-motion: reduce) {
