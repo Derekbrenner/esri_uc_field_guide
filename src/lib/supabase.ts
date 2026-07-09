@@ -21,6 +21,10 @@ if (isSupabaseConfigured) {
   })
 }
 
+// Shared client for the social layer (src/lib/social.ts). Null when Supabase
+// isn't configured — every consumer checks isSupabaseConfigured first.
+export const supabase: SupabaseClient | null = client
+
 export type LiveLocation = {
   id: string // stable per-device id (localStorage)
   name: string

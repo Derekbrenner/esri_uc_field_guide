@@ -9,6 +9,7 @@ export type VenueCategory =
 
 export type Venue = {
   name: string
+  slug: string // stable kebab-case id; used to build the venue's spot_key
   category: VenueCategory
   area?: string // the doc's subcategory: "Fast Spots", "Sit Down Spots", "Further Away", etc.
   notes: string
@@ -20,10 +21,29 @@ export type Venue = {
   url?: string
 }
 
+// Deterministic kebab-case slug from a name. Strips diacritics and apostrophes
+// so slugs stay clean and stable — the slug feeds each venue's spot_key, so it
+// must not change once venues are live (rename the display name freely; the
+// slug only shifts if you also change it here).
+function slugify(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // drop accents (é → e)
+    .toLowerCase()
+    .replace(/['’]/g, '') // drop apostrophes so "Freddy's" → "freddys"
+    .replace(/[^a-z0-9]+/g, '-') // any run of non-alphanumerics → single hyphen
+    .replace(/^-+|-+$/g, '') // trim leading/trailing hyphens
+}
+
+// A curated venue's spot_key. User-added spots use their DB uuid instead.
+export function venueKey(v: { slug: string }): string {
+  return 'venue:' + v.slug
+}
+
 // NOTE ON COORDINATES: these are best-effort locations in downtown San Diego
 // (Gaslamp / East Village / Little Italy) so the map is useful out of the box.
 // A few may be a block off — every one is easy to nudge: just edit lat/lng here.
-export const venues: Venue[] = [
+const rawVenues: Omit<Venue, 'slug'>[] = [
   // --- Landmarks / key schedule spots ---
   { name: 'San Diego Convention Center', category: 'Landmark', landmark: true, notes: 'Home base — plenary, sessions, exhibit hall.', lat: 32.7065, lng: -117.161 },
   { name: 'Marriott Marquis', category: 'Landmark', landmark: true, notes: 'Badge pickup + Central Coast Meetup (Pacific Ballroom Salon 14).', lat: 32.7062, lng: -117.1622 },
@@ -79,6 +99,9 @@ export const venues: Venue[] = [
   // --- Sweets ---
   { name: 'Salt and Straw', category: 'Sweets', notes: 'Famous ice cream in Little Italy.', lat: 32.7238, lng: -117.169 },
 ]
+
+// Each venue gets a stable slug derived from its name (see slugify above).
+export const venues: Venue[] = rawVenues.map((v) => ({ ...v, slug: slugify(v.name) }))
 
 export const categoryOrder: VenueCategory[] = [
   'Landmark',
