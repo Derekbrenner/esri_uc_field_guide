@@ -1081,12 +1081,41 @@ export default function MapView({
   // "Show on map" from the Pictures tab: fly to the photo's location on mount /
   // whenever a new focus is requested (the `at` nonce forces a re-fly), then
   // clear it so re-entering the Map tab doesn't re-fly to a stale spot.
+  // Open the popup of the spot (or coordinate-only photo) marker sitting at the
+  // given coordinates, so "View on map" arrives with the tooltip already open.
+  const openPopupAt = (lat: number, lng: number) => {
+    const near = (a: number, b: number) => Math.abs(a - b) < 1e-4
+    for (const { marker, spot } of markers.current.values()) {
+      if (near(spot.lat, lat) && near(spot.lng, lng)) {
+        marker.openPopup()
+        return
+      }
+    }
+    let hit: L.Marker | undefined
+    photoLayer.current?.eachLayer((l) => {
+      const ll = (l as L.Marker).getLatLng?.()
+      if (!hit && ll && near(ll.lat, lat) && near(ll.lng, lng)) hit = l as L.Marker
+    })
+    hit?.openPopup()
+  }
+
   useEffect(() => {
     if (!focus || !mapRef.current) return
     mapRef.current.flyTo([focus.lat, focus.lng], 17, { duration: 0.9 })
+    openPopupAt(focus.lat, focus.lng)
     onFocusConsumed?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus?.at, focus?.lat, focus?.lng])
+
+  // Once we learn the user belongs to a squad, collapse the squad legend by
+  // default — their group's already sorted, so keep the map clear. Applied only
+  // once (via the ref guard) so a manual re-open afterwards sticks.
+  const legendAutoCollapsed = useRef(false)
+  useEffect(() => {
+    if (legendAutoCollapsed.current || !mySquadId) return
+    legendAutoCollapsed.current = true
+    setLegendOpen(false)
+  }, [mySquadId])
 
   // Leaving the Top-voted lens when the last vote is removed avoids a blank map.
   useEffect(() => {
