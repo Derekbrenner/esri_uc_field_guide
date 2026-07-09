@@ -1959,7 +1959,9 @@ select.einput { appearance: none; -webkit-appearance: none; cursor: pointer; }
   .hero-actions .btn { flex: 1 1 auto; justify-content: center; }
 
   .hero-cards { grid-template-columns: 1fr; }
-  .share { right: 14px; left: 14px; top: 12px; width: auto; }
+  /* inset the bottom-sheet from the side edges; keep it bottom-anchored — do NOT
+     re-add `top` here or fixed top+bottom stretches the collapsed panel over the map */
+  .share { right: 14px; left: 14px; width: auto; }
   .mapview-stage { padding: 0 14px; }
   .leaflet-stage { height: 66vh; }
   .view-head { padding: 28px 14px 16px; }
