@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useLiveLocations } from './lib/useLiveLocations'
-import { useCheckins, usePhotos, useVotes } from './lib/useSocial'
+import { useCheckins, usePhotos, useSpots, useVotes } from './lib/useSocial'
 import Hero from './components/Hero'
 import MapView, { type MapFocus } from './components/MapView'
 import FoodView from './components/FoodView'
@@ -40,6 +40,9 @@ export default function App() {
   // realtime subscription each.
   const checkins = useCheckins()
   const photos = usePhotos()
+  // User-added spots (Phase 5): shared so the map + food list agree and the
+  // realtime subscription persists as the user switches tabs.
+  const spots = useSpots()
 
   // Pictures + Scores are social features — hidden when Supabase isn't configured.
   const tabs = useMemo<Tab[]>(
@@ -109,11 +112,12 @@ export default function App() {
             votes={votes}
             checkins={checkins}
             photos={photos}
+            spots={spots}
             focus={mapFocus}
             onFocusConsumed={() => setMapFocus(null)}
           />
         )}
-        {tab === 'Food & Drink' && <FoodView onNav={go} live={live} votes={votes} />}
+        {tab === 'Food & Drink' && <FoodView onNav={go} live={live} votes={votes} spots={spots} />}
         {tab === 'Pictures' && <PicturesView photos={photos} live={live} onShowOnMap={showOnMap} />}
         {tab === 'Schedule' && <ScheduleView />}
         {tab === 'Crew' && <CrewView />}

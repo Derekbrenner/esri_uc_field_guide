@@ -122,3 +122,24 @@ export const categoryColor: Record<VenueCategory, string> = {
   Rooftops: '#4DBFA6',
   Sweets: '#F58BB6',
 }
+
+// User-added spots (Phase 5) can carry any curated category plus a catch-all
+// "point of interest". SpotCategory is the widened category used for spots.
+export type SpotCategory = VenueCategory | 'poi'
+
+// Muted survey-ink swatch for generic POIs — sits quietly next to the vivid
+// category colors so a user's dropped pin reads as a "field note", not a venue.
+export const poiColor = '#9db2c4'
+
+// The picker's category options: the curated set, then the POI catch-all.
+export const spotCategoryOptions: SpotCategory[] = [...categoryOrder, 'poi']
+
+// Marker / swatch color for any spot category.
+export function colorForCategory(cat: SpotCategory): string {
+  return cat === 'poi' ? poiColor : categoryColor[cat]
+}
+
+// Human label for a spot category (curated names pass through; 'poi' spells out).
+export function categoryLabel(cat: SpotCategory): string {
+  return cat === 'poi' ? 'Point of interest' : cat
+}

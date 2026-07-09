@@ -1,23 +1,64 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import L from 'leaflet'
-import { categoryColor, categoryOrder, venueKey, venues, type Venue, type VenueCategory } from '../data/venues'
+import {
+  categoryColor,
+  categoryOrder,
+  colorForCategory,
+  poiColor,
+  spotCategoryOptions,
+  venueKey,
+  venues,
+  type SpotCategory,
+} from '../data/venues'
 import { colorForId, type LiveState } from '../lib/useLiveLocations'
-import { useCheckins, useNameGate, usePhotos, useSquads, useVoteGate, type VotesApi } from '../lib/useSocial'
+import {
+  useCheckins,
+  useNameGate,
+  usePhotos,
+  useSpots,
+  useSquads,
+  useVoteGate,
+  type VotesApi,
+} from '../lib/useSocial'
 import { photoUrl, type Checkin, type Photo } from '../lib/social'
 import CheckInButton from './CheckInButton'
 import PhotoUpload from './PhotoUpload'
+import AddSpotPanel, { type SpotFields } from './AddSpotPanel'
 import SharePanel from './SharePanel'
 import NamePrompt from './NamePrompt'
 
 type CheckinsApi = ReturnType<typeof useCheckins>
 type PhotosApi = ReturnType<typeof usePhotos>
+type SpotsApi = ReturnType<typeof useSpots>
+
+// A curated venue OR a user-added spot, normalized into one shape so every pin,
+// popup, vote, check-in, and photo path treats them identically. `spotKey` is
+// the vote/check-in/photo key: 'venue:<slug>' for venues, the DB uuid for
+// user-added spots.
+type MapSpot = {
+  spotKey: string
+  name: string
+  category: SpotCategory
+  notes: string
+  schedule?: string
+  lat: number
+  lng: number
+  landmark: boolean
+  userAdded: boolean
+  addedByName: string | null
+  addedByDevice: string | null
+}
 
 // Where "Show on map" flies to. `at` is a nonce so re-picking the same spot
 // re-fires the effect.
 export type MapFocus = { lat: number; lng: number; at: number }
 
 const CENTER: [number, number] = [32.7108, -117.1605]
+
+// The category lens covers every curated category plus the POI catch-all that
+// user spots can carry.
+const ALL_CATS: SpotCategory[] = spotCategoryOptions
 
 // Marker grows + glows with vote count; the visual is capped at 8 votes so a
 // runaway favorite doesn't swallow the map.
@@ -32,24 +73,38 @@ function cssUrl(url: string): string {
   return url.replace(/[\\'")]/g, '')
 }
 
-function venueIcon(
-  category: VenueCategory,
-  landmark: boolean,
-  voteCount: number,
-  thumbUrl?: string,
-): L.DivIcon {
-  const color = categoryColor[category]
+function spotIcon(s: MapSpot, voteCount: number, thumbUrl?: string): L.DivIcon {
+  const color = colorForCategory(s.category)
   const capped = Math.min(voteCount, VOTE_CAP)
   const size = 16 + capped * 1.6 // 16 → ~29px
   const box = size + 10 // padding for the glow ring + count badge
   const badge = voteCount > 0 ? `<b class="pin-votes mono">${voteCount > 99 ? '99+' : voteCount}</b>` : ''
   const photo = thumbUrl ? `<i class="pin-photo" style="background-image:url('${cssUrl(thumbUrl)}')"></i>` : ''
+  const cls = [
+    'pin',
+    s.landmark ? 'pin--landmark' : '',
+    s.userAdded ? 'pin--user' : '',
+    voteCount > 0 ? 'pin--voted' : '',
+    thumbUrl ? 'pin--photo' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   return L.divIcon({
     className: 'pin-wrap',
-    html: `<span class="pin${landmark ? ' pin--landmark' : ''}${voteCount > 0 ? ' pin--voted' : ''}${thumbUrl ? ' pin--photo' : ''}" style="--pin:${color};--pinv:${capped};--pinsz:${size}px">${badge}${photo}</span>`,
+    html: `<span class="${cls}" style="--pin:${color};--pinv:${capped};--pinsz:${size}px">${badge}${photo}</span>`,
     iconSize: [box, box],
     iconAnchor: [box / 2, box / 2],
     popupAnchor: [0, -box / 2],
+  })
+}
+
+// The transient "drop point" marker shown while placing a new spot.
+function draftIcon(): L.DivIcon {
+  return L.divIcon({
+    className: 'draftpin-wrap',
+    html: `<span class="draftpin"><span class="draftpin-core"></span></span>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
   })
 }
 
@@ -192,26 +247,36 @@ function voteHtml(spotKey: string, count: number, mine: boolean): string {
 }
 
 function popupHtml(
-  v: Venue,
-  spotKey: string,
+  s: MapSpot,
   count: number,
   mine: boolean,
   voteConfigured: boolean,
   checkinConfigured: boolean,
   photoConfigured: boolean,
+  canEdit: boolean,
 ): string {
-  const dir = `https://www.google.com/maps/dir/?api=1&destination=${v.lat},${v.lng}`
+  const dir = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`
+  const catLabel = s.category === 'poi' ? 'Point of interest' : s.category
   return `<div class="pop">
-    <div class="pop-cat mono">${escapeHtml(v.category)}</div>
-    <div class="pop-name">${escapeHtml(v.name)}</div>
-    <div class="pop-notes">${escapeHtml(v.notes)}</div>
-    ${v.schedule ? `<div class="pop-sched">📌 ${escapeHtml(v.schedule)}</div>` : ''}
+    <div class="pop-cat mono">${escapeHtml(catLabel)}${s.userAdded ? ' · field note' : ''}</div>
+    <div class="pop-name">${escapeHtml(s.name)}</div>
+    ${s.notes ? `<div class="pop-notes">${escapeHtml(s.notes)}</div>` : ''}
+    ${s.schedule ? `<div class="pop-sched">📌 ${escapeHtml(s.schedule)}</div>` : ''}
+    ${s.userAdded && s.addedByName ? `<div class="pop-added mono">added by ${escapeHtml(s.addedByName)}</div>` : ''}
     <div class="pop-actions">
-      ${voteConfigured ? voteHtml(spotKey, count, mine) : ''}
+      ${voteConfigured ? voteHtml(s.spotKey, count, mine) : ''}
       <a class="pop-dir" href="${dir}" target="_blank" rel="noopener">Directions ↗</a>
     </div>
     ${checkinConfigured ? '<div class="checkin-mount"></div>' : ''}
     ${photoConfigured ? '<div class="photo-mount"></div>' : ''}
+    ${
+      canEdit
+        ? `<div class="pop-owner">
+      <button type="button" class="pop-edit" data-editspot="${escapeHtml(s.spotKey)}">Edit</button>
+      <button type="button" class="pop-delete" data-deletespot="${escapeHtml(s.spotKey)}">Delete</button>
+    </div>`
+        : ''
+    }
   </div>`
 }
 
@@ -220,6 +285,7 @@ export default function MapView({
   votes,
   checkins,
   photos,
+  spots,
   focus,
   onFocusConsumed,
 }: {
@@ -227,6 +293,7 @@ export default function MapView({
   votes: VotesApi
   checkins: CheckinsApi
   photos: PhotosApi
+  spots: SpotsApi
   focus?: MapFocus | null
   onFocusConsumed?: () => void
 }) {
@@ -236,15 +303,22 @@ export default function MapView({
   const presenceLayer = useRef<L.LayerGroup | null>(null)
   const photoLayer = useRef<L.LayerGroup | null>(null)
   const liveLayer = useRef<L.LayerGroup | null>(null)
-  const markers = useRef<Map<string, { marker: L.Marker; venue: Venue }>>(new Map())
+  const draftMarker = useRef<L.Marker | null>(null)
+  const markers = useRef<Map<string, { marker: L.Marker; spot: MapSpot }>>(new Map())
 
-  const [active, setActive] = useState<Set<VenueCategory>>(() => new Set(categoryOrder))
+  const [active, setActive] = useState<Set<SpotCategory>>(() => new Set(ALL_CATS))
   const [topVoted, setTopVoted] = useState(false)
+  // Add-spot mode: crosshair cursor, tap-to-drop, the placement sheet.
+  const [addMode, setAddMode] = useState(false)
+  const [draftPoint, setDraftPoint] = useState<{ lat: number; lng: number } | null>(null)
+  const [locating, setLocating] = useState(false)
+  // The user's own spot currently being edited (from its popup), or null.
+  const [editingSpot, setEditingSpot] = useState<MapSpot | null>(null)
   // The venue whose popup is open + the DOM nodes to portal the check-in button
   // and photo strip into. Cleared when the popup closes or pins are rebuilt.
   const [openPopup, setOpenPopup] = useState<{
     key: string
-    venue: Venue
+    spot: MapSpot
     checkinNode: HTMLElement | null
     photoNode: HTMLElement | null
   } | null>(null)
@@ -252,32 +326,91 @@ export default function MapView({
   const gate = useVoteGate(votes, live)
   const checkinGate = useNameGate(live)
   const photoGate = useNameGate(live)
+  const spotGate = useNameGate(live)
   const squads = useSquads()
   const { countFor, hasMine, configured: voteConfigured } = votes
 
   const myOpen = checkins.openFor(live.myId)
   const mySquadId = squads.squadOf(live.myId)
 
-  // Which venues are on the map right now. The "Top voted" lens shows every
-  // spot with ≥1 vote regardless of category; otherwise the category chips rule.
-  const visibleVenues = useMemo(() => {
-    if (topVoted) return venues.filter((v) => countFor(venueKey(v)) > 0)
-    return venues.filter((v) => active.has(v.category))
-  }, [topVoted, active, countFor])
+  // Ownership test for edit/delete affordances (adder only).
+  const myIdRef = useRef(live.myId)
+  myIdRef.current = live.myId
+  const canEditSpot = (s: MapSpot) => s.userAdded && s.addedByDevice === myIdRef.current
 
-  // Membership signature — changes only when the *set* of visible pins changes,
-  // so a mere vote-count bump doesn't tear down (and close) open popups.
-  const membershipKey = useMemo(() => visibleVenues.map((v) => venueKey(v)).join('|'), [visibleVenues])
+  // --- Merge curated venues with user-added spots into one pin model ---------
+  const venueSpots = useMemo<MapSpot[]>(
+    () =>
+      venues.map((v) => ({
+        spotKey: venueKey(v),
+        name: v.name,
+        category: v.category,
+        notes: v.notes,
+        schedule: v.schedule,
+        lat: v.lat,
+        lng: v.lng,
+        landmark: !!v.landmark,
+        userAdded: false,
+        addedByName: null,
+        addedByDevice: null,
+      })),
+    [],
+  )
+
+  const userSpots = useMemo<MapSpot[]>(
+    () =>
+      spots.spots
+        .filter((s) => s.lat != null && s.lng != null)
+        .map((s) => ({
+          spotKey: s.id,
+          name: s.name,
+          category: (s.category as SpotCategory) || 'poi',
+          notes: s.note ?? '',
+          schedule: undefined,
+          lat: s.lat as number,
+          lng: s.lng as number,
+          landmark: false,
+          userAdded: true,
+          addedByName: s.added_by_name,
+          addedByDevice: s.added_by_device,
+        })),
+    [spots.spots],
+  )
+
+  const allSpots = useMemo(() => [...venueSpots, ...userSpots], [venueSpots, userSpots])
+
+  const spotByKey = useMemo(() => {
+    const m = new Map<string, MapSpot>()
+    for (const s of allSpots) m.set(s.spotKey, s)
+    return m
+  }, [allSpots])
+
+  // Which spots are on the map right now. The "Top voted" lens shows every spot
+  // with ≥1 vote regardless of category; otherwise the category chips rule.
+  const visibleSpots = useMemo(() => {
+    if (topVoted) return allSpots.filter((s) => countFor(s.spotKey) > 0)
+    return allSpots.filter((s) => active.has(s.category))
+  }, [topVoted, active, countFor, allSpots])
+
+  // Membership signature — changes when the *set* of visible pins changes (or a
+  // user spot's own content / location changes), so a mere vote-count bump
+  // doesn't tear down open popups, but an edited spot does rebuild.
+  const membershipKey = useMemo(
+    () =>
+      visibleSpots
+        .map((s) =>
+          s.userAdded ? `${s.spotKey}@${s.lat},${s.lng}#${s.name}#${s.category}#${s.notes}` : s.spotKey,
+        )
+        .join('|'),
+    [visibleSpots],
+  )
   // Count/mine signature — drives live in-place icon + open-popup updates.
   const voteSig = useMemo(
     () =>
-      visibleVenues
-        .map((v) => {
-          const k = venueKey(v)
-          return `${k}:${countFor(k)}:${hasMine(k) ? 1 : 0}`
-        })
+      visibleSpots
+        .map((s) => `${s.spotKey}:${countFor(s.spotKey)}:${hasMine(s.spotKey) ? 1 : 0}`)
         .join('|'),
-    [visibleVenues, countFor, hasMine],
+    [visibleSpots, countFor, hasMine],
   )
 
   // --- Photos: group by spot (newest-first — photos arrive desc by created) ---
@@ -296,14 +429,13 @@ export default function MapView({
   // newest (thumbnail) photo changes, so we can refresh just the icons.
   const photoSig = useMemo(
     () =>
-      visibleVenues
-        .map((v) => {
-          const k = venueKey(v)
-          const arr = photosBySpot.get(k)
-          return `${k}:${arr && arr.length ? `${arr.length}_${arr[0].id}` : '0'}`
+      visibleSpots
+        .map((s) => {
+          const arr = photosBySpot.get(s.spotKey)
+          return `${s.spotKey}:${arr && arr.length ? `${arr.length}_${arr[0].id}` : '0'}`
         })
         .join('|'),
-    [visibleVenues, photosBySpot],
+    [visibleSpots, photosBySpot],
   )
 
   // Coordinate-only photos (no spot) become their own tiny markers.
@@ -313,23 +445,14 @@ export default function MapView({
   )
   const coordPhotoSig = useMemo(() => coordPhotos.map((p) => p.id).join('|'), [coordPhotos])
 
-  // --- Presence: group fresh open check-ins by spot, resolve to coordinates ---
-  const venueBySlug = useMemo(() => {
-    const m = new Map<string, Venue>()
-    for (const v of venues) m.set(v.slug, v)
-    return m
-  }, [])
-
   // Coordinates to stamp on a "photo here" while checked in — the spot's own
-  // location for a curated venue, else the GPS fix recorded at check-in.
+  // location for a known spot, else the GPS fix recorded at check-in.
   const myOpenCoords = useMemo(() => {
     if (!myOpen) return null
-    if (myOpen.spot_key.startsWith('venue:')) {
-      const v = venueBySlug.get(myOpen.spot_key.slice('venue:'.length))
-      if (v) return { lat: v.lat, lng: v.lng }
-    }
+    const s = spotByKey.get(myOpen.spot_key)
+    if (s) return { lat: s.lat, lng: s.lng }
     return myOpen.lat != null && myOpen.lng != null ? { lat: myOpen.lat, lng: myOpen.lng } : null
-  }, [myOpen, venueBySlug])
+  }, [myOpen, spotByKey])
 
   const presence = useMemo(() => {
     const now = Date.now()
@@ -362,8 +485,8 @@ export default function MapView({
 
   // Latest values for the imperative effects / listeners, kept in refs so the
   // effects don't need to re-run (and rebuild markers) on every render.
-  const visibleRef = useRef(visibleVenues)
-  visibleRef.current = visibleVenues
+  const visibleRef = useRef(visibleSpots)
+  visibleRef.current = visibleSpots
   const countForRef = useRef(countFor)
   countForRef.current = countFor
   const hasMineRef = useRef(hasMine)
@@ -376,21 +499,31 @@ export default function MapView({
   requestVoteRef.current = gate.request
   const presenceRef = useRef(presence)
   presenceRef.current = presence
-  const venueBySlugRef = useRef(venueBySlug)
-  venueBySlugRef.current = venueBySlug
+  const spotByKeyRef = useRef(spotByKey)
+  spotByKeyRef.current = spotByKey
   const photoConfiguredRef = useRef(photos.configured)
   photoConfiguredRef.current = photos.configured
   const photosBySpotRef = useRef(photosBySpot)
   photosBySpotRef.current = photosBySpot
   const coordPhotosRef = useRef(coordPhotos)
   coordPhotosRef.current = coordPhotos
+  const removeSpotRef = useRef(spots.removeSpot)
+  removeSpotRef.current = spots.removeSpot
 
-  // Build a venue's marker icon from the *current* vote count + newest photo
+  // Build a spot's marker icon from the *current* vote count + newest photo
   // thumbnail (both read via refs, so the imperative effects stay in sync).
-  const makeIcon = (v: Venue, key: string): L.DivIcon => {
-    const arr = photosBySpotRef.current.get(key)
+  const makeIcon = (s: MapSpot): L.DivIcon => {
+    const arr = photosBySpotRef.current.get(s.spotKey)
     const thumb = arr && arr.length ? photoUrl(arr[0].storage_path) : ''
-    return venueIcon(v.category, !!v.landmark, countForRef.current(key), thumb || undefined)
+    return spotIcon(s, countForRef.current(s.spotKey), thumb || undefined)
+  }
+
+  // Leave add/edit flow and clear any transient placement state.
+  const closeSpotFlow = () => {
+    setAddMode(false)
+    setEditingSpot(null)
+    setDraftPoint(null)
+    setLocating(false)
   }
 
   // init map once
@@ -414,16 +547,47 @@ export default function MapView({
     liveLayer.current = L.layerGroup().addTo(map)
     mapRef.current = map
 
-    // One delegated listener handles every popup's vote button, present or
-    // future — popups live inside the map container so clicks bubble here.
+    // One delegated listener handles every popup's vote button + a user spot's
+    // edit / delete buttons, present or future — popups live inside the map
+    // container so clicks bubble here.
     const el = mapEl.current
     const onClick = (e: MouseEvent) => {
-      const btn = (e.target as HTMLElement)?.closest('[data-votekey]') as HTMLElement | null
-      if (!btn) return
-      e.preventDefault()
-      e.stopPropagation()
-      const key = btn.getAttribute('data-votekey')
-      if (key) requestVoteRef.current(key)
+      const target = e.target as HTMLElement | null
+      if (!target) return
+      const voteBtn = target.closest('[data-votekey]') as HTMLElement | null
+      if (voteBtn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const key = voteBtn.getAttribute('data-votekey')
+        if (key) requestVoteRef.current(key)
+        return
+      }
+      const editBtn = target.closest('[data-editspot]') as HTMLElement | null
+      if (editBtn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const key = editBtn.getAttribute('data-editspot')
+        const s = key ? spotByKeyRef.current.get(key) : null
+        if (s) {
+          mapRef.current?.closePopup()
+          setAddMode(false)
+          setDraftPoint(null)
+          setEditingSpot(s)
+        }
+        return
+      }
+      const delBtn = target.closest('[data-deletespot]') as HTMLElement | null
+      if (delBtn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const key = delBtn.getAttribute('data-deletespot')
+        const s = key ? spotByKeyRef.current.get(key) : null
+        if (s && window.confirm(`Delete “${s.name}”? This removes it for everyone.`)) {
+          mapRef.current?.closePopup()
+          removeSpotRef.current(s.spotKey)
+        }
+        return
+      }
     }
     el.addEventListener('click', onClick)
 
@@ -435,9 +599,9 @@ export default function MapView({
       const checkinNode = (root?.querySelector('.checkin-mount') as HTMLElement | null) ?? null
       const photoNode = (root?.querySelector('.photo-mount') as HTMLElement | null) ?? null
       if (!checkinNode && !photoNode) return
-      for (const [key, { marker, venue }] of markers.current) {
+      for (const [key, { marker, spot }] of markers.current) {
         if (marker.getPopup() === e.popup) {
-          setOpenPopup({ key, venue, checkinNode, photoNode })
+          setOpenPopup({ key, spot, checkinNode, photoNode })
           return
         }
       }
@@ -455,34 +619,66 @@ export default function MapView({
     }
   }, [])
 
-  // Rebuild pins only when the visible SET changes (filter / lens change).
+  // Add mode: crosshair cursor + tap-to-drop. Bound only while placing a spot.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !addMode) return
+    const container = map.getContainer()
+    container.classList.add('leaflet-adding')
+    const onMapClick = (e: L.LeafletMouseEvent) => {
+      setDraftPoint({ lat: e.latlng.lat, lng: e.latlng.lng })
+    }
+    map.on('click', onMapClick)
+    return () => {
+      container.classList.remove('leaflet-adding')
+      map.off('click', onMapClick)
+    }
+  }, [addMode])
+
+  // The transient drop-point marker follows draftPoint while in add mode.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (draftMarker.current) {
+      map.removeLayer(draftMarker.current)
+      draftMarker.current = null
+    }
+    if (addMode && draftPoint) {
+      draftMarker.current = L.marker([draftPoint.lat, draftPoint.lng], {
+        icon: draftIcon(),
+        zIndexOffset: 900,
+        interactive: false,
+        keyboard: false,
+      }).addTo(map)
+    }
+  }, [addMode, draftPoint])
+
+  // Rebuild pins only when the visible SET (or a user spot's content) changes.
   useEffect(() => {
     const layer = venueLayer.current
     if (!layer) return
     setOpenPopup(null) // any open popup closes when pins are rebuilt
     layer.clearLayers()
     markers.current.clear()
-    for (const v of visibleRef.current) {
-      const key = venueKey(v)
-      const count = countForRef.current(key)
-      const mine = hasMineRef.current(key)
-      const marker = L.marker([v.lat, v.lng], {
-        icon: makeIcon(v, key),
-        title: v.name,
+    for (const s of visibleRef.current) {
+      const key = s.spotKey
+      const marker = L.marker([s.lat, s.lng], {
+        icon: makeIcon(s),
+        title: s.name,
       })
         .bindPopup(
           popupHtml(
-            v,
-            key,
-            count,
-            mine,
+            s,
+            countForRef.current(key),
+            hasMineRef.current(key),
             voteConfiguredRef.current,
             checkinConfiguredRef.current,
             photoConfiguredRef.current,
+            canEditSpot(s),
           ),
         )
         .addTo(layer)
-      markers.current.set(key, { marker, venue: v })
+      markers.current.set(key, { marker, spot: s })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [membershipKey])
@@ -490,20 +686,18 @@ export default function MapView({
   // Live vote updates: rescale/glow each pin and refresh any open popup in
   // place — no teardown, so an open popup stays open while the count ticks.
   useEffect(() => {
-    for (const [key, { marker, venue }] of markers.current) {
-      const count = countForRef.current(key)
-      const mine = hasMineRef.current(key)
-      marker.setIcon(makeIcon(venue, key))
+    for (const [key, { marker, spot }] of markers.current) {
+      marker.setIcon(makeIcon(spot))
       if (marker.isPopupOpen()) {
         marker.setPopupContent(
           popupHtml(
-            venue,
-            key,
-            count,
-            mine,
+            spot,
+            countForRef.current(key),
+            hasMineRef.current(key),
             voteConfiguredRef.current,
             checkinConfiguredRef.current,
             photoConfiguredRef.current,
+            canEditSpot(spot),
           ),
         )
         // setPopupContent replaced the popup DOM (including the mounts); re-point
@@ -520,8 +714,8 @@ export default function MapView({
   // Live photo updates: refresh pin thumbnails without touching popup content
   // (so an open popup's in-progress caption / strip isn't torn down).
   useEffect(() => {
-    for (const [key, { marker, venue }] of markers.current) {
-      marker.setIcon(makeIcon(venue, key))
+    for (const [, { marker, spot }] of markers.current) {
+      marker.setIcon(makeIcon(spot))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [photoSig])
@@ -531,17 +725,15 @@ export default function MapView({
     const layer = presenceLayer.current
     if (!layer) return
     layer.clearLayers()
-    const bySlug = venueBySlugRef.current
+    const byKey = spotByKeyRef.current
     for (const [key, arr] of presenceRef.current) {
       const sample = arr[0]
       let coords: [number, number] | null = null
       let spotName = sample.spot_name || 'Spot'
-      if (key.startsWith('venue:')) {
-        const v = bySlug.get(key.slice('venue:'.length))
-        if (v) {
-          coords = [v.lat, v.lng]
-          spotName = v.name
-        }
+      const spot = byKey.get(key)
+      if (spot) {
+        coords = [spot.lat, spot.lng]
+        spotName = spot.name
       }
       if (!coords && sample.lat != null && sample.lng != null) coords = [sample.lat, sample.lng]
       if (!coords) continue
@@ -613,7 +805,7 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveKey, live.myId])
 
-  const toggle = (c: VenueCategory) => {
+  const toggle = (c: SpotCategory) => {
     setTopVoted(false)
     setActive((prev) => {
       const next = new Set(prev)
@@ -628,7 +820,72 @@ export default function MapView({
     else if (mapRef.current) mapRef.current.flyTo(CENTER, 15)
   }
 
-  const allOn = active.size === categoryOrder.length && !topVoted
+  // "Use my location" while placing a spot: prefer the live dot, else a fresh
+  // GPS fix. Flies to the point and drops the draft pin there.
+  const useMyLocationForSpot = () => {
+    const drop = (lat: number, lng: number) => {
+      setDraftPoint({ lat, lng })
+      mapRef.current?.flyTo([lat, lng], 17, { duration: 0.6 })
+    }
+    if (live.me) {
+      drop(live.me.lat, live.me.lng)
+      return
+    }
+    if (!('geolocation' in navigator)) return
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        setLocating(false)
+        drop(p.coords.latitude, p.coords.longitude)
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, maximumAge: 10_000, timeout: 15_000 },
+    )
+  }
+
+  // A stable prefill for the form (memoized on the spot being edited so typing
+  // isn't reset every render).
+  const spotFormInitial = useMemo<SpotFields | null>(
+    () =>
+      editingSpot
+        ? { name: editingSpot.name, category: editingSpot.category, note: editingSpot.notes }
+        : null,
+    [editingSpot],
+  )
+
+  const submitSpot = (fields: SpotFields) => {
+    if (editingSpot) {
+      spots.editSpot(editingSpot.spotKey, {
+        name: fields.name,
+        category: fields.category,
+        note: fields.note || null,
+      })
+      closeSpotFlow()
+      return
+    }
+    const point = draftPoint
+    if (!point) return
+    // Attribute to the shared identity — prompt for a name first if unset.
+    spotGate.request(() => {
+      const name = (live.name || localStorage.getItem('sdfg.name') || 'Someone').trim() || 'Someone'
+      spots
+        .addSpot({
+          name: fields.name,
+          category: fields.category,
+          lat: point.lat,
+          lng: point.lng,
+          note: fields.note || null,
+          added_by_name: name,
+          added_by_device: live.myId,
+        })
+        .then(({ data }) => {
+          if (data && mapRef.current) mapRef.current.flyTo([point.lat, point.lng], 17, { duration: 0.6 })
+        })
+      closeSpotFlow()
+    })
+  }
+
+  const allOn = ALL_CATS.every((c) => active.has(c)) && !topVoted
 
   return (
     <div className="mapview">
@@ -638,11 +895,28 @@ export default function MapView({
             className={`chip chip--all${allOn ? ' chip--on' : ''}`}
             onClick={() => {
               setTopVoted(false)
-              setActive(active.size === categoryOrder.length ? new Set() : new Set(categoryOrder))
+              setActive(allOn ? new Set() : new Set(ALL_CATS))
             }}
           >
-            {active.size === categoryOrder.length && !topVoted ? 'Clear' : 'All'}
+            {allOn ? 'Clear' : 'All'}
           </button>
+          {spots.configured && (
+            <button
+              className={`chip chip--add${addMode ? ' chip--on' : ''}`}
+              onClick={() => {
+                if (addMode) closeSpotFlow()
+                else {
+                  setEditingSpot(null)
+                  setDraftPoint(null)
+                  setAddMode(true)
+                }
+              }}
+              aria-pressed={addMode}
+            >
+              <span className="chip-plus" aria-hidden>＋</span>
+              Add spot
+            </button>
+          )}
           {voteConfigured && votes.topKeys.length > 0 && (
             <button
               className={`chip chip--fav${topVoted ? ' chip--on' : ''}`}
@@ -666,12 +940,35 @@ export default function MapView({
               {c}
             </button>
           ))}
+          {userSpots.some((s) => s.category === 'poi') && (
+            <button
+              className={`chip${active.has('poi') && !topVoted ? ' chip--on' : ''}`}
+              style={{ ['--chip' as string]: poiColor }}
+              onClick={() => toggle('poi')}
+              aria-pressed={active.has('poi') && !topVoted}
+            >
+              <span className="chip-dot" />
+              POI
+            </button>
+          )}
         </div>
       </div>
 
       <div className="mapview-stage">
         <div ref={mapEl} className="leaflet-stage" role="application" aria-label="Map of San Diego venues and live attendee locations" />
         <SharePanel live={live} onRecenter={flyToMe} />
+
+        {(addMode || editingSpot) && (
+          <AddSpotPanel
+            mode={editingSpot ? 'edit' : 'add'}
+            initial={spotFormInitial}
+            point={draftPoint}
+            locating={locating}
+            onUseMyLocation={useMyLocationForSpot}
+            onSubmit={submitSpot}
+            onClose={closeSpotFlow}
+          />
+        )}
 
         {/* Prominent "add a photo here" while checked in somewhere. */}
         {photos.configured && myOpen && (
@@ -694,9 +991,9 @@ export default function MapView({
         createPortal(
           <CheckInButton
             spotKey={openPopup.key}
-            spotName={openPopup.venue.name}
-            lat={openPopup.venue.lat}
-            lng={openPopup.venue.lng}
+            spotName={openPopup.spot.name}
+            lat={openPopup.spot.lat}
+            lng={openPopup.spot.lng}
             deviceId={live.myId}
             myOpen={myOpen}
             squadId={mySquadId}
@@ -711,8 +1008,8 @@ export default function MapView({
         createPortal(
           <SpotPhotos
             spotKey={openPopup.key}
-            lat={openPopup.venue.lat}
-            lng={openPopup.venue.lng}
+            lat={openPopup.spot.lat}
+            lng={openPopup.spot.lng}
             photos={photos.photosFor(openPopup.key)}
             deviceId={live.myId}
             upload={photos.upload}
@@ -737,6 +1034,14 @@ export default function MapView({
         title="Who’s sharing this photo?"
         lede="Pick your name so the crew knows whose shot this is. Saved on this device only."
         cta="Save & continue"
+      />
+      <NamePrompt
+        open={spotGate.promptOpen}
+        onSave={spotGate.resolve}
+        onCancel={spotGate.cancel}
+        title="Who’s adding this spot?"
+        lede="Pick your name so the crew knows who put this on the map. Saved on this device only."
+        cta="Save & add spot"
       />
     </div>
   )

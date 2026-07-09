@@ -842,6 +842,115 @@ a { color: var(--kelp); }
 .pres-nearby { font-family: var(--mono); font-size: 9.5px; color: var(--paper-faint); letter-spacing: 0.04em; }
 
 /* ============================================================
+   USER-ADDED SPOTS (Phase 5) — field-note pins · add panel · popup owner
+   ============================================================ */
+
+/* "Add spot" mode toggle chip */
+.chip--add { --chip: var(--kelp); }
+.chip-plus { color: var(--kelp); font-size: 15px; line-height: 1; font-weight: 700; }
+.chip--add.chip--on { color: var(--paper); border-color: var(--kelp); background: color-mix(in srgb, var(--kelp) 18%, var(--chart)); }
+.chip--add.chip--on .chip-plus { color: var(--paper); }
+
+/* crosshair while placing a spot */
+.leaflet-adding { cursor: crosshair !important; }
+.leaflet-adding .leaflet-grab,
+.leaflet-adding .leaflet-interactive { cursor: crosshair !important; }
+
+/* user-added pins get a dashed "field note" ring instead of the solid one */
+.pin--user {
+  background: color-mix(in srgb, var(--pin) 34%, var(--abyss));
+  border-color: var(--abyss);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.pin--user::before {
+  content: '';
+  position: absolute; inset: -4px;
+  border-radius: inherit;
+  border: 1.5px dashed var(--pin);
+  opacity: 0.9;
+}
+.pin--landmark.pin--user::before { border-radius: 5px; }
+
+/* transient drop-point marker while placing a new spot */
+.draftpin-wrap { background: none !important; border: none !important; }
+.draftpin { position: relative; display: grid; place-items: center; width: 30px; height: 30px; }
+.draftpin::before {
+  content: '';
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  border: 2px solid var(--coral);
+  opacity: 0.85;
+  animation: livepulse 1.8s ease-out infinite;
+}
+.draftpin-core {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--coral);
+  border: 2.5px solid var(--abyss);
+  box-shadow: 0 0 0 1.5px var(--coral), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+/* "added by" line + edit/delete in a user spot's popup */
+.pop-added { font-size: 11px; color: var(--paper-faint); margin-top: 6px; letter-spacing: 0.02em; }
+.pop-owner {
+  display: flex; gap: 8px;
+  margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.pop-edit, .pop-delete {
+  flex: 1;
+  background: none; border: 1px solid var(--line-strong);
+  color: var(--paper-dim); border-radius: 999px;
+  padding: 7px 12px; min-height: 34px;
+  font-size: 12.5px; font-weight: 600;
+}
+.pop-edit:hover { border-color: var(--ping); color: var(--paper); }
+.pop-delete:hover { border-color: rgba(255, 107, 74, 0.5); color: var(--coral); }
+
+/* ---------- Add / edit spot panel ---------- */
+.addspot {
+  position: absolute;
+  left: 36px; bottom: 26px;
+  width: min(320px, calc(100% - 52px));
+  z-index: 600;
+  background: rgba(14, 39, 50, 0.96);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+  padding: 14px 16px 16px;
+  max-height: calc(100% - 52px);
+  overflow-y: auto;
+}
+.addspot-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.addspot-head .section-eyebrow { margin: 0; }
+.addspot-x { background: none; border: 0; color: var(--paper-faint); font-size: 15px; line-height: 1; padding: 4px; }
+.addspot-x:hover { color: var(--paper); }
+.addspot-hint { font-size: 12.5px; color: var(--paper-dim); line-height: 1.45; margin: 10px 0; }
+.addspot-loc { width: 100%; justify-content: center; padding: 10px 14px; font-size: 13px; }
+.addspot-catwrap { position: relative; display: flex; align-items: center; }
+.addspot-catdot {
+  position: absolute; left: 12px;
+  width: 10px; height: 10px; border-radius: 50%;
+  color: inherit; box-shadow: 0 0 6px currentColor;
+  pointer-events: none;
+}
+.addspot-select { padding-left: 30px; appearance: none; -webkit-appearance: none; cursor: pointer; }
+.addspot-note { resize: vertical; min-height: 44px; font-family: var(--body); line-height: 1.4; }
+.addspot-opt { color: var(--paper-faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.addspot-actions { display: flex; gap: 10px; margin-top: 16px; }
+.addspot-actions .btn { flex: 1; justify-content: center; }
+
+/* "added by" tag on a user-added food card */
+.foodcard--user { border-left-style: dashed; }
+.foodcard-added {
+  font-size: 9.5px; color: var(--kelp);
+  white-space: nowrap; letter-spacing: 0.03em;
+  border: 1px solid color-mix(in srgb, var(--kelp) 40%, transparent);
+  padding: 1px 6px; border-radius: 999px;
+}
+
+/* ============================================================
    SCORES
    ============================================================ */
 .scoresview { max-width: var(--maxw); margin: 0 auto; padding-bottom: 60px; }
@@ -963,6 +1072,7 @@ a { color: var(--kelp); }
 .nameprompt-actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 @keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
 @keyframes popin { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes sheetup { from { transform: translateY(100%); } to { transform: none; } }
 
 /* ============================================================
    PHOTOS — pin badges · photo markers · upload · Pictures · lightbox
@@ -1281,6 +1391,21 @@ a { color: var(--kelp); }
   }
   /* day headers don't stick under the sliding mobile chrome */
   .pics-day-head { position: static; }
+
+  /* the add-spot panel becomes a bottom sheet above the share sheet + nav */
+  .addspot {
+    position: fixed; top: auto;
+    left: 0; right: 0;
+    bottom: calc(var(--botnav-h) + env(safe-area-inset-bottom));
+    width: auto; z-index: 1300;
+    border-radius: 18px 18px 0 0;
+    border-left: 0; border-right: 0; border-bottom: 0;
+    max-height: 74dvh;
+    padding: 16px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.55);
+    animation: sheetup 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+  .addspot-actions .btn { min-height: 46px; }
 }
 
 @media (max-width: 560px) {
@@ -1315,7 +1440,6 @@ a { color: var(--kelp); }
     animation: sheetup 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
   }
   .nameprompt-actions .btn { min-height: 46px; }
-  @keyframes sheetup { from { transform: translateY(100%); } to { transform: none; } }
 }
 
 @media (prefers-reduced-motion: reduce) {
