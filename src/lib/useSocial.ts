@@ -405,6 +405,27 @@ export function useCheckins() {
 
 // --- Squads ----------------------------------------------------------------
 
+// Own squad id, remembered locally so a fresh reload can stamp new check-ins
+// with the squad before the members list finishes loading from the server.
+const SQUAD_ID_KEY = 'sdfg.squadId'
+
+function rememberSquadId(squadId: string | null) {
+  try {
+    if (squadId) localStorage.setItem(SQUAD_ID_KEY, squadId)
+    else localStorage.removeItem(SQUAD_ID_KEY)
+  } catch {
+    /* localStorage unavailable — fall back to server-derived membership only */
+  }
+}
+
+function rememberedSquadId(): string | null {
+  try {
+    return localStorage.getItem(SQUAD_ID_KEY)
+  } catch {
+    return null
+  }
+}
+
 export function useSquads() {
   const { rows: squads, setRows: setSquads } = useRealtimeList<Squad>(fetchSquads, subscribeSquads)
   const {
@@ -432,6 +453,7 @@ export function useSquads() {
       }
       // One squad per person: drop my other memberships first.
       setMembers((prev) => [...prev.filter((m) => m.device_id !== id.deviceId), optimistic])
+      rememberSquadId(squadId)
       const { error } = await joinSquadRemote(squadId, id)
       if (error) refreshMembers()
       return { error }
@@ -442,6 +464,7 @@ export function useSquads() {
   const leaveSquad = useCallback(
     async (deviceId: string): Promise<MutationResult> => {
       setMembers((prev) => prev.filter((m) => m.device_id !== deviceId))
+      rememberSquadId(null)
       const { error } = await leaveAllSquads(deviceId)
       if (error) refreshMembers()
       return { error }
@@ -450,7 +473,14 @@ export function useSquads() {
   )
 
   const squadOf = useCallback(
-    (deviceId: string) => members.find((m) => m.device_id === deviceId)?.squad_id ?? null,
+    (deviceId: string) => {
+      const fromMembers = members.find((m) => m.device_id === deviceId)?.squad_id
+      if (fromMembers) return fromMembers
+      // Pre-load fallback: before the members list arrives (members still empty),
+      // trust the locally remembered squad so new check-ins stay stamped.
+      if (members.length === 0) return rememberedSquadId()
+      return null
+    },
     [members],
   )
 

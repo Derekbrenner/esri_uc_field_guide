@@ -100,9 +100,64 @@ export function badgesFor(checkins: Checkin[], photos: Photo[], deviceId: string
   return earned
 }
 
-// Combined points for a set of devices (a squad's members). Phase 6 refines
-// this to only count today's squad-stamped check-ins; for now it's the sum of
-// member scores.
-export function squadScore(checkins: Checkin[], photos: Photo[], deviceIds: string[]): number {
-  return deviceIds.reduce((sum, d) => sum + scoreFor(checkins, photos, d), 0)
+// --- Squads (Phase 6) -------------------------------------------------------
+
+// True when an ISO timestamp falls on the same local calendar day as `now`.
+export function isSameLocalDay(iso: string, now: number = Date.now()): boolean {
+  const d = new Date(iso)
+  const n = new Date(now)
+  return (
+    d.getFullYear() === n.getFullYear() &&
+    d.getMonth() === n.getMonth() &&
+    d.getDate() === n.getDate()
+  )
+}
+
+// A squad's rallied location from its members' current open check-ins: the spot
+// where a majority of the checked-in members are. `openSpotKeys` is one
+// spot_key per checked-in member. Returns null when nobody's checked in or no
+// single spot holds a majority — the caller renders that as "scattered".
+export function squadLocation(openSpotKeys: string[]): string | null {
+  if (openSpotKeys.length === 0) return null
+  const counts = new Map<string, number>()
+  for (const k of openSpotKeys) counts.set(k, (counts.get(k) ?? 0) + 1)
+  let best: string | null = null
+  let bestN = 0
+  for (const [k, n] of counts) {
+    if (n > bestN) {
+      best = k
+      bestN = n
+    }
+  }
+  // Require a strict majority of the checked-in members, else "scattered".
+  return bestN * 2 > openSpotKeys.length ? best : null
+}
+
+// A squad's score (Phase 6): points from check-ins stamped with this squad
+// today. Each squad-stamped check-in contributes its verified/unverified value,
+// plus the first-of-crew bonus for any spot a member reached first crew-wide.
+// Photos aren't squad-scoped, so they don't count toward squad totals. Summed
+// this way, a squad's total equals its members' individual check-in points for
+// the day, so the two boards reconcile.
+export function squadScore(
+  checkins: Checkin[],
+  squadId: string,
+  now: number = Date.now(),
+): number {
+  const first = firstDeviceBySpot(checkins) // crew-wide earliest per spot
+  const firstAwarded = new Set<string>() // dedupe the +5 per (device, spot)
+  let score = 0
+  for (const c of checkins) {
+    if (c.squad_id !== squadId) continue
+    if (!isSameLocalDay(c.created_at, now)) continue
+    score += c.verified ? POINTS.verifiedCheckin : POINTS.unverifiedCheckin
+    if (first.get(c.spot_key) === c.device_id) {
+      const k = `${c.device_id}@${c.spot_key}`
+      if (!firstAwarded.has(k)) {
+        firstAwarded.add(k)
+        score += POINTS.firstOfCrew
+      }
+    }
+  }
+  return score
 }

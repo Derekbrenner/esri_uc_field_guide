@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useLiveLocations } from './lib/useLiveLocations'
-import { useCheckins, usePhotos, useSpots, useVotes } from './lib/useSocial'
+import { useCheckins, usePhotos, useSpots, useSquads, useVotes } from './lib/useSocial'
 import Hero from './components/Hero'
 import MapView, { type MapFocus } from './components/MapView'
 import FoodView from './components/FoodView'
@@ -8,6 +8,7 @@ import PicturesView from './components/PicturesView'
 import ScheduleView from './components/ScheduleView'
 import CrewView from './components/CrewView'
 import ScoresView from './components/ScoresView'
+import SquadPanel from './components/SquadPanel'
 import Toasts from './components/Toasts'
 import { CalendarIcon, CameraIcon, CompassIcon, CrewIcon, CupIcon, PinIcon, TrophyIcon } from './components/icons'
 
@@ -43,6 +44,11 @@ export default function App() {
   // User-added spots (Phase 5): shared so the map + food list agree and the
   // realtime subscription persists as the user switches tabs.
   const spots = useSpots()
+  // Squads (Phase 6): shared across the map legend, the Scores board, the squad
+  // panel, and the join toasts — one subscription for the whole app.
+  const squads = useSquads()
+  // The squad create/join sheet, opened from the Map legend or the Scores tab.
+  const [squadsOpen, setSquadsOpen] = useState(false)
 
   // Pictures + Scores are social features — hidden when Supabase isn't configured.
   const tabs = useMemo<Tab[]>(
@@ -113,15 +119,25 @@ export default function App() {
             checkins={checkins}
             photos={photos}
             spots={spots}
+            squads={squads}
             focus={mapFocus}
             onFocusConsumed={() => setMapFocus(null)}
+            onOpenSquads={() => setSquadsOpen(true)}
           />
         )}
         {tab === 'Food & Drink' && <FoodView onNav={go} live={live} votes={votes} spots={spots} />}
         {tab === 'Pictures' && <PicturesView photos={photos} live={live} onShowOnMap={showOnMap} />}
         {tab === 'Schedule' && <ScheduleView />}
         {tab === 'Crew' && <CrewView />}
-        {tab === 'Scores' && <ScoresView checkins={checkins.checkins} photos={photos.photos} myId={live.myId} />}
+        {tab === 'Scores' && (
+          <ScoresView
+            checkins={checkins.checkins}
+            photos={photos.photos}
+            myId={live.myId}
+            squads={squads}
+            onManageSquads={() => setSquadsOpen(true)}
+          />
+        )}
       </main>
 
       <footer className="footer">
@@ -151,7 +167,23 @@ export default function App() {
         })}
       </nav>
 
-      {live.configured && <Toasts checkins={checkins.checkins} myId={live.myId} />}
+      {live.configured && (
+        <Toasts
+          checkins={checkins.checkins}
+          members={squads.members}
+          squads={squads.squads}
+          myId={live.myId}
+        />
+      )}
+
+      {squads.configured && (
+        <SquadPanel
+          open={squadsOpen}
+          onClose={() => setSquadsOpen(false)}
+          squads={squads}
+          live={live}
+        />
+      )}
     </div>
   )
 }

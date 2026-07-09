@@ -22,6 +22,7 @@ import {
   type VotesApi,
 } from '../lib/useSocial'
 import { photoUrl, type Checkin, type Photo } from '../lib/social'
+import { squadLocation } from '../lib/points'
 import CheckInButton from './CheckInButton'
 import PhotoUpload from './PhotoUpload'
 import AddSpotPanel, { type SpotFields } from './AddSpotPanel'
@@ -31,6 +32,7 @@ import NamePrompt from './NamePrompt'
 type CheckinsApi = ReturnType<typeof useCheckins>
 type PhotosApi = ReturnType<typeof usePhotos>
 type SpotsApi = ReturnType<typeof useSpots>
+type SquadsApi = ReturnType<typeof useSquads>
 
 // A curated venue OR a user-added spot, normalized into one shape so every pin,
 // popup, vote, check-in, and photo path treats them identically. `spotKey` is
@@ -286,16 +288,20 @@ export default function MapView({
   checkins,
   photos,
   spots,
+  squads,
   focus,
   onFocusConsumed,
+  onOpenSquads,
 }: {
   live: LiveState
   votes: VotesApi
   checkins: CheckinsApi
   photos: PhotosApi
   spots: SpotsApi
+  squads: SquadsApi
   focus?: MapFocus | null
   onFocusConsumed?: () => void
+  onOpenSquads?: () => void
 }) {
   const mapEl = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
@@ -308,6 +314,11 @@ export default function MapView({
 
   const [active, setActive] = useState<Set<SpotCategory>>(() => new Set(ALL_CATS))
   const [topVoted, setTopVoted] = useState(false)
+  // Squad legend: collapsible list of squads + where each group is. Starts
+  // collapsed on small screens (keep the map clear), open on larger ones.
+  const [legendOpen, setLegendOpen] = useState(
+    () => !(typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches),
+  )
   // Add-spot mode: crosshair cursor, tap-to-drop, the placement sheet.
   const [addMode, setAddMode] = useState(false)
   const [draftPoint, setDraftPoint] = useState<{ lat: number; lng: number } | null>(null)
@@ -327,7 +338,6 @@ export default function MapView({
   const checkinGate = useNameGate(live)
   const photoGate = useNameGate(live)
   const spotGate = useNameGate(live)
-  const squads = useSquads()
   const { countFor, hasMine, configured: voteConfigured } = votes
 
   const myOpen = checkins.openFor(live.myId)
@@ -454,17 +464,22 @@ export default function MapView({
     return myOpen.lat != null && myOpen.lng != null ? { lat: myOpen.lat, lng: myOpen.lng } : null
   }, [myOpen, spotByKey])
 
-  const presence = useMemo(() => {
+  // Each person's single newest open+fresh check-in — one place per person,
+  // even during the brief overlap while a move-to-a-new-spot reconciles. Shared
+  // by the presence clusters and the squad legend's "where's the group" logic.
+  const currentByDevice = useMemo(() => {
     const now = Date.now()
-    // Each person's single newest open+fresh check-in — one place per person,
-    // even during the brief overlap while a move-to-a-new-spot reconciles.
-    const currentByDevice = new Map<string, Checkin>()
+    const m = new Map<string, Checkin>()
     for (const c of checkins.checkins) {
       if (c.ended_at) continue
       if (now - new Date(c.created_at).getTime() >= PRESENCE_MAX_AGE_MS) continue
-      const existing = currentByDevice.get(c.device_id)
-      if (!existing || c.created_at > existing.created_at) currentByDevice.set(c.device_id, c)
+      const existing = m.get(c.device_id)
+      if (!existing || c.created_at > existing.created_at) m.set(c.device_id, c)
     }
+    return m
+  }, [checkins.checkins])
+
+  const presence = useMemo(() => {
     const groups = new Map<string, Checkin[]>()
     for (const c of currentByDevice.values()) {
       const arr = groups.get(c.spot_key) ?? []
@@ -472,7 +487,7 @@ export default function MapView({
       groups.set(c.spot_key, arr)
     }
     return groups
-  }, [checkins.checkins])
+  }, [currentByDevice])
 
   const presenceSig = useMemo(
     () =>
@@ -482,6 +497,37 @@ export default function MapView({
         .join('|'),
     [presence],
   )
+
+  // Squad legend rows: each squad, its members, and where the group is right now
+  // — the spot a majority of its checked-in members share (else "scattered").
+  const squadLegend = useMemo(() => {
+    return squads.squads.map((sq) => {
+      const members = squads.membersOf(sq.id)
+      const openKeys: string[] = []
+      for (const m of members) {
+        const oc = currentByDevice.get(m.device_id)
+        if (oc) openKeys.push(oc.spot_key)
+      }
+      const locKey = squadLocation(openKeys)
+      let coords: { lat: number; lng: number } | null = null
+      let locLabel: string
+      if (locKey) {
+        const spot = spotByKey.get(locKey)
+        if (spot) {
+          coords = { lat: spot.lat, lng: spot.lng }
+          locLabel = spot.name
+        } else {
+          // Unknown spot_key (e.g. a since-removed spot): use a member's stamp.
+          const oc = [...currentByDevice.values()].find((c) => c.spot_key === locKey)
+          if (oc && oc.lat != null && oc.lng != null) coords = { lat: oc.lat, lng: oc.lng }
+          locLabel = oc?.spot_name || 'a spot'
+        }
+      } else {
+        locLabel = openKeys.length > 0 ? 'Scattered' : 'No check-ins yet'
+      }
+      return { squad: sq, members, coords, locLabel, checkedIn: openKeys.length }
+    })
+  }, [squads.squads, squads.members, currentByDevice, spotByKey])
 
   // Latest values for the imperative effects / listeners, kept in refs so the
   // effects don't need to re-run (and rebuild markers) on every render.
@@ -820,6 +866,12 @@ export default function MapView({
     else if (mapRef.current) mapRef.current.flyTo(CENTER, 15)
   }
 
+  // Fly to a squad's current rally point (from the squad legend). No-op when the
+  // group is scattered / not checked in anywhere.
+  const flyToSquad = (coords: { lat: number; lng: number } | null) => {
+    if (coords && mapRef.current) mapRef.current.flyTo([coords.lat, coords.lng], 16, { duration: 0.8 })
+  }
+
   // "Use my location" while placing a spot: prefer the live dot, else a fresh
   // GPS fix. Flies to the point and drops the draft pin there.
   const useMyLocationForSpot = () => {
@@ -957,6 +1009,69 @@ export default function MapView({
       <div className="mapview-stage">
         <div ref={mapEl} className="leaflet-stage" role="application" aria-label="Map of San Diego venues and live attendee locations" />
         <SharePanel live={live} onRecenter={flyToMe} />
+
+        {squads.configured && (
+          <div className={`squadlegend${legendOpen ? '' : ' squadlegend--collapsed'}`}>
+            <button
+              className="squadlegend-handle"
+              onClick={() => setLegendOpen((o) => !o)}
+              aria-expanded={legendOpen}
+            >
+              <span className="squadlegend-ico" aria-hidden>🚩</span>
+              <span className="squadlegend-title">Squads</span>
+              <span className="squadlegend-count mono">{squads.squads.length}</span>
+              <span className="squadlegend-caret" aria-hidden>{legendOpen ? '▾' : '▴'}</span>
+            </button>
+            {legendOpen && (
+              <div className="squadlegend-body">
+                {squadLegend.length === 0 ? (
+                  <p className="squadlegend-empty">
+                    No squads yet. Split the crew into groups for the night — everyone stays on the map.
+                  </p>
+                ) : (
+                  <ul className="squadlegend-list">
+                    {squadLegend.map((r) => (
+                      <li key={r.squad.id}>
+                        <button
+                          className="squadlegend-row"
+                          onClick={() => flyToSquad(r.coords)}
+                          disabled={!r.coords}
+                          title={r.coords ? `Fly to ${r.locLabel}` : r.locLabel}
+                        >
+                          <span className="squadlegend-emoji" aria-hidden>{r.squad.emoji || '📍'}</span>
+                          <span className="squadlegend-main">
+                            <span className="squadlegend-name">{r.squad.name}</span>
+                            <span className={`squadlegend-loc${r.coords ? ' squadlegend-loc--here' : ''}`}>
+                              {r.coords ? '📍 ' : ''}
+                              {r.locLabel}
+                            </span>
+                          </span>
+                          <span className="squadlegend-avs" aria-hidden>
+                            {r.members.slice(0, 3).map((m) => (
+                              <span
+                                key={m.device_id}
+                                className="squadlegend-av"
+                                style={{ ['--av' as string]: colorForId(m.device_id) }}
+                              >
+                                {initials(m.name || '')}
+                              </span>
+                            ))}
+                            {r.members.length > 3 && (
+                              <span className="squadlegend-more">+{r.members.length - 3}</span>
+                            )}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <button className="squadlegend-manage" onClick={() => onOpenSquads?.()}>
+                  <span className="chip-plus" aria-hidden>＋</span> Create or join
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {(addMode || editingSpot) && (
           <AddSpotPanel

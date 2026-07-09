@@ -1,21 +1,31 @@
 import { useMemo, useState } from 'react'
 import type { Checkin, Photo } from '../lib/social'
-import { badgesFor, scoreFor } from '../lib/points'
+import { useSquads } from '../lib/useSocial'
+import { badgesFor, scoreFor, squadScore } from '../lib/points'
 import { colorForId } from '../lib/useLiveLocations'
 
 type BoardTab = 'individual' | 'squads'
+type SquadsApi = ReturnType<typeof useSquads>
 
-// The Scores tab: a live leaderboard of everyone's check-in (and, from Phase 4,
-// photo) points, with earned badges. The Squads sub-tab is scaffolded here but
-// stays dormant until Phase 6 wires squad totals.
+function initials(name: string | null | undefined): string {
+  return (name || '?').trim().slice(0, 2).toUpperCase() || '?'
+}
+
+// The Scores tab: a live leaderboard of everyone's check-in + photo points with
+// earned badges, plus a Squads board (Phase 6) totalling each squad's
+// squad-stamped check-in points for today.
 export default function ScoresView({
   checkins,
   photos,
   myId,
+  squads,
+  onManageSquads,
 }: {
   checkins: Checkin[]
   photos: Photo[]
   myId: string
+  squads: SquadsApi
+  onManageSquads: () => void
 }) {
   const [tab, setTab] = useState<BoardTab>('individual')
 
@@ -44,6 +54,21 @@ export default function ScoresView({
       .sort((a, b) => b.points - a.points || a.name.localeCompare(b.name))
   }, [checkins, photos])
 
+  const mySquadId = squads.squadOf(myId)
+
+  // Squad board: each squad's total from today's squad-stamped check-ins.
+  const squadBoard = useMemo(
+    () =>
+      squads.squads
+        .map((s) => ({
+          squad: s,
+          members: squads.membersOf(s.id),
+          points: squadScore(checkins, s.id),
+        }))
+        .sort((a, b) => b.points - a.points || a.squad.name.localeCompare(b.squad.name)),
+    [squads.squads, squads.members, checkins],
+  )
+
   return (
     <section className="scoresview">
       <header className="view-head">
@@ -53,23 +78,31 @@ export default function ScoresView({
           Check in around town to rack up points — 10 for a verified check-in, 3 from afar, plus
           bonuses for being first and snapping photos. Updates live as the crew roams.
         </p>
-        <div className="segmented" role="tablist" aria-label="Leaderboard view">
-          <button
-            role="tab"
-            aria-selected={tab === 'individual'}
-            className={`segmented-btn${tab === 'individual' ? ' segmented-btn--on' : ''}`}
-            onClick={() => setTab('individual')}
-          >
-            Individual
-          </button>
-          <button
-            role="tab"
-            aria-selected={tab === 'squads'}
-            className={`segmented-btn${tab === 'squads' ? ' segmented-btn--on' : ''}`}
-            onClick={() => setTab('squads')}
-          >
-            Squads
-          </button>
+        <div className="scores-tabsrow">
+          <div className="segmented" role="tablist" aria-label="Leaderboard view">
+            <button
+              role="tab"
+              aria-selected={tab === 'individual'}
+              className={`segmented-btn${tab === 'individual' ? ' segmented-btn--on' : ''}`}
+              onClick={() => setTab('individual')}
+            >
+              Individual
+            </button>
+            <button
+              role="tab"
+              aria-selected={tab === 'squads'}
+              className={`segmented-btn${tab === 'squads' ? ' segmented-btn--on' : ''}`}
+              onClick={() => setTab('squads')}
+            >
+              Squads
+            </button>
+          </div>
+          {squads.configured && (
+            <button className="scores-squadbtn" onClick={onManageSquads}>
+              <span className="chip-plus" aria-hidden>＋</span>
+              Squads
+            </button>
+          )}
         </div>
       </header>
 
@@ -104,11 +137,47 @@ export default function ScoresView({
               ))}
             </ol>
           )
-        ) : (
+        ) : squadBoard.length === 0 ? (
           <p className="scores-empty">
-            Squad standings light up once squads arrive. Form one, then check in together to climb
-            the board.
+            No squads yet. Form one, then check in together to climb the board.{' '}
+            {squads.configured && (
+              <button className="scores-emptylink" onClick={onManageSquads}>
+                Start a squad →
+              </button>
+            )}
           </p>
+        ) : (
+          <>
+            <ol className="board">
+              {squadBoard.map((r, i) => (
+                <li
+                  key={r.squad.id}
+                  className={`board-row${r.squad.id === mySquadId ? ' board-row--me' : ''}`}
+                >
+                  <span className="board-rank mono">{i + 1}</span>
+                  <span className="board-squademoji" aria-hidden>{r.squad.emoji || '📍'}</span>
+                  <span className="board-name">
+                    {r.squad.name}
+                    {r.squad.id === mySquadId && <span className="board-you mono">yours</span>}
+                  </span>
+                  <span className="board-squadavs" aria-hidden>
+                    {r.members.slice(0, 5).map((m) => (
+                      <span
+                        key={m.device_id}
+                        className="board-squadav"
+                        style={{ ['--av' as string]: colorForId(m.device_id) }}
+                        title={m.name || 'Someone'}
+                      >
+                        {initials(m.name)}
+                      </span>
+                    ))}
+                  </span>
+                  <span className="board-points mono">{r.points}</span>
+                </li>
+              ))}
+            </ol>
+            <p className="scores-foot">Squad points count today’s check-ins made while in the squad.</p>
+          </>
         )}
       </div>
     </section>
