@@ -21,6 +21,12 @@ if (isSupabaseConfigured) {
   })
 }
 
+// Shared client accessor for the social-layer modules (votes, check-ins, …).
+// Returns null when Supabase isn't configured, so every feature can no-op.
+export function getSupabase(): SupabaseClient | null {
+  return client
+}
+
 export type LiveLocation = {
   id: string // stable per-device id (localStorage)
   name: string

@@ -18,6 +18,25 @@ export type Venue = {
   lat: number
   lng: number
   url?: string
+  slug?: string // stable key override; when absent it is derived from the name
+}
+
+// Kebab-case slug derived deterministically from a venue name. Accents are
+// stripped so the key stays ASCII and stable across refreshes/clients.
+export function slugify(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '') // strip combining diacritics
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
+// The universal spot_key for a curated venue: 'venue:<slug>'. User-added spots
+// (Phase 5) use their DB uuid directly instead. Everything that references a
+// spot — votes, check-ins, photos, meetups — keys off this string.
+export function venueKey(v: Pick<Venue, 'name' | 'slug'>): string {
+  return 'venue:' + (v.slug ?? slugify(v.name))
 }
 
 // NOTE ON COORDINATES: these are best-effort locations in downtown San Diego

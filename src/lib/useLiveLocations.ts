@@ -47,6 +47,9 @@ export type LiveState = {
   error: string | null
   start: (name: string) => void
   stop: () => void
+  // Remember a display name without turning on location sharing — used by the
+  // social layer (e.g. the vote name-gate) so identity stays in one place.
+  setName: (name: string) => void
 }
 
 export function useLiveLocations(): LiveState {
@@ -151,6 +154,13 @@ export function useLiveLocations(): LiveState {
     refresh()
   }, [myId, refresh])
 
+  const setNamePublic = useCallback((who: string) => {
+    const trimmed = who.trim() || 'Someone'
+    setName(trimmed)
+    localStorage.setItem(NAME_KEY, trimmed)
+    nameRef.current = trimmed
+  }, [])
+
   // Heartbeat: if we're sharing and have a recent fix, keep it warm.
   useEffect(() => {
     if (!sharing) return
@@ -183,5 +193,6 @@ export function useLiveLocations(): LiveState {
     error,
     start,
     stop,
+    setName: setNamePublic,
   }
 }
