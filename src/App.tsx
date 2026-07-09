@@ -1,14 +1,16 @@
-import { useEffect, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useLiveLocations } from './lib/useLiveLocations'
-import { useVotes } from './lib/useSocial'
+import { useCheckins, usePhotos, useVotes } from './lib/useSocial'
 import Hero from './components/Hero'
 import MapView from './components/MapView'
 import FoodView from './components/FoodView'
 import ScheduleView from './components/ScheduleView'
 import CrewView from './components/CrewView'
-import { CalendarIcon, CompassIcon, CrewIcon, CupIcon, PinIcon } from './components/icons'
+import ScoresView from './components/ScoresView'
+import Toasts from './components/Toasts'
+import { CalendarIcon, CompassIcon, CrewIcon, CupIcon, PinIcon, TrophyIcon } from './components/icons'
 
-const TABS = ['Guide', 'Map', 'Food & Drink', 'Schedule', 'Crew'] as const
+const TABS = ['Guide', 'Map', 'Food & Drink', 'Schedule', 'Crew', 'Scores'] as const
 export type Tab = (typeof TABS)[number]
 
 // Short labels + icons for the mobile bottom bar.
@@ -18,6 +20,7 @@ const TAB_META: Record<Tab, { short: string; Icon: ComponentType<{ className?: s
   'Food & Drink': { short: 'Food', Icon: CupIcon },
   Schedule: { short: 'Plan', Icon: CalendarIcon },
   Crew: { short: 'Crew', Icon: CrewIcon },
+  Scores: { short: 'Scores', Icon: TrophyIcon },
 }
 
 export default function App() {
@@ -25,17 +28,27 @@ export default function App() {
   const live = useLiveLocations()
   // Shared across the map + food views so the subscription persists across tabs.
   const votes = useVotes()
+  // Shared check-in + photo streams: the map (presence + check-in), the Scores
+  // leaderboard, and the toast feed all read from one realtime subscription.
+  const checkins = useCheckins()
+  const photos = usePhotos()
+
+  // Scores is a social feature — hidden entirely when Supabase isn't configured.
+  const tabs = useMemo<Tab[]>(
+    () => (live.configured ? [...TABS] : TABS.filter((t) => t !== 'Scores')),
+    [live.configured],
+  )
 
   // Let the map deep-link via hash (#map) so "Live map" buttons can jump there.
   useEffect(() => {
     const fromHash = () => {
       const h = decodeURIComponent(location.hash.replace('#', '')) as Tab
-      if (TABS.includes(h)) setTab(h)
+      if (tabs.includes(h)) setTab(h)
     }
     fromHash()
     window.addEventListener('hashchange', fromHash)
     return () => window.removeEventListener('hashchange', fromHash)
-  }, [])
+  }, [tabs])
 
   const go = (t: Tab) => {
     setTab(t)
@@ -58,7 +71,7 @@ export default function App() {
           </span>
         </button>
         <nav className="tabs" aria-label="Sections">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <button
               key={t}
               className={`tab${tab === t ? ' tab--active' : ''}`}
@@ -76,10 +89,11 @@ export default function App() {
 
       <main id="main" className="main">
         {tab === 'Guide' && <Hero onNav={go} live={live} />}
-        {tab === 'Map' && <MapView live={live} votes={votes} />}
+        {tab === 'Map' && <MapView live={live} votes={votes} checkins={checkins} />}
         {tab === 'Food & Drink' && <FoodView onNav={go} live={live} votes={votes} />}
         {tab === 'Schedule' && <ScheduleView />}
         {tab === 'Crew' && <CrewView />}
+        {tab === 'Scores' && <ScoresView checkins={checkins.checkins} photos={photos.photos} myId={live.myId} />}
       </main>
 
       <footer className="footer">
@@ -88,8 +102,8 @@ export default function App() {
       </footer>
 
       {/* Thumb-reachable bottom nav — mobile only (CSS-gated). */}
-      <nav className="botnav" aria-label="Sections">
-        {TABS.map((t) => {
+      <nav className="botnav" aria-label="Sections" style={{ ['--tabcount' as string]: tabs.length }}>
+        {tabs.map((t) => {
           const { short, Icon } = TAB_META[t]
           const isMap = t === 'Map'
           return (
@@ -108,6 +122,8 @@ export default function App() {
           )
         })}
       </nav>
+
+      {live.configured && <Toasts checkins={checkins.checkins} myId={live.myId} />}
     </div>
   )
 }

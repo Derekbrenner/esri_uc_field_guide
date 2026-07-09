@@ -60,3 +60,13 @@ export function CrewIcon({ className }: P) {
     </svg>
   )
 }
+
+export function TrophyIcon({ className }: P) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M7 4h10v4a5 5 0 0 1-10 0V4Z" />
+      <path d="M7 6H4.5v1.5A3.5 3.5 0 0 0 8 11M17 6h2.5v1.5A3.5 3.5 0 0 1 16 11" />
+      <path d="M12 13v4M9 21h6M9.5 21c0-1.7 1-3 2.5-3s2.5 1.3 2.5 3" />
+    </svg>
+  )
+}

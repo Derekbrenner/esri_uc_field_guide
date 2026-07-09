@@ -8,10 +8,16 @@ export default function NamePrompt({
   open,
   onSave,
   onCancel,
+  title = 'Who’s voting?',
+  lede = 'Pick your name so the crew knows whose favorites are whose. Saved on this device only.',
+  cta = 'Save & vote',
 }: {
   open: boolean
   onSave: (name: string) => void
   onCancel: () => void
+  title?: string
+  lede?: string
+  cta?: string
 }) {
   const [draft, setDraft] = useState('')
   if (!open) return null
@@ -30,10 +36,8 @@ export default function NamePrompt({
         onClick={(e) => e.stopPropagation()}
       >
         <p className="section-eyebrow">One quick thing</p>
-        <h2 className="nameprompt-title">Who’s voting?</h2>
-        <p className="nameprompt-lede">
-          Pick your name so the crew knows whose favorites are whose. Saved on this device only.
-        </p>
+        <h2 className="nameprompt-title">{title}</h2>
+        <p className="nameprompt-lede">{lede}</p>
         <label className="share-label" htmlFor="vote-name">Your name</label>
         <input
           id="vote-name"
@@ -56,7 +60,7 @@ export default function NamePrompt({
         <div className="nameprompt-actions">
           <button className="btn btn--ghost" onClick={onCancel}>Cancel</button>
           <button className="btn btn--primary" onClick={save} disabled={!draft.trim()}>
-            Save &amp; vote
+            {cta}
           </button>
         </div>
       </div>

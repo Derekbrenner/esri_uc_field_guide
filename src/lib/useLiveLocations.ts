@@ -27,6 +27,12 @@ function hash(s: string): number {
   return h
 }
 
+// Deterministic dot color for a device id — the SAME mapping the live map uses,
+// so a person's presence avatar / leaderboard dot matches their live dot color.
+export function colorForId(id: string): string {
+  return DOT_COLORS[Math.abs(hash(id)) % DOT_COLORS.length]
+}
+
 function getDeviceId(): string {
   let id = localStorage.getItem(ID_KEY)
   if (!id) {
@@ -54,7 +60,7 @@ export type LiveState = {
 
 export function useLiveLocations(): LiveState {
   const myId = useRef<string>(getDeviceId()).current
-  const myColor = DOT_COLORS[Math.abs(hash(myId)) % DOT_COLORS.length]
+  const myColor = colorForId(myId)
 
   const [sharing, setSharing] = useState(false)
   const [name, setName] = useState(() => localStorage.getItem(NAME_KEY) ?? '')

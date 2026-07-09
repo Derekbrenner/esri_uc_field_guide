@@ -304,6 +304,53 @@ export function useVoteGate(
   return { request, promptOpen, resolve, cancel }
 }
 
+// A generic version of the vote name-gate: if the user hasn't set a display
+// name yet, hold the pending action and open the name picker first, then run it
+// once they save. Reuses the shared identity (localStorage name via setName).
+// Used by check-ins (and any future social action that needs a name).
+export type NameGate = {
+  request: (action: () => void) => void
+  promptOpen: boolean
+  resolve: (name: string) => void
+  cancel: () => void
+}
+
+export function useNameGate(live: { name: string; setName: (name: string) => void }): NameGate {
+  const [promptOpen, setPromptOpen] = useState(false)
+  const pending = useRef<null | (() => void)>(null)
+
+  const request = useCallback(
+    (action: () => void) => {
+      if (!isSupabaseConfigured) return
+      if (live.name && live.name.trim()) {
+        action()
+        return
+      }
+      pending.current = action
+      setPromptOpen(true)
+    },
+    [live.name],
+  )
+
+  const resolve = useCallback(
+    (name: string) => {
+      live.setName(name) // writes localStorage synchronously
+      const action = pending.current
+      pending.current = null
+      setPromptOpen(false)
+      if (action) action()
+    },
+    [live],
+  )
+
+  const cancel = useCallback(() => {
+    pending.current = null
+    setPromptOpen(false)
+  }, [])
+
+  return { request, promptOpen, resolve, cancel }
+}
+
 // --- Check-ins -------------------------------------------------------------
 
 export function useCheckins() {

@@ -761,6 +761,151 @@ a { color: var(--kelp); }
 .crew-arrow { color: var(--paper-faint); }
 
 /* ============================================================
+   CHECK-IN control (rendered into spot popups)
+   ============================================================ */
+.checkin-mount:empty { display: none; }
+.checkin { margin-top: 10px; }
+
+.checkin-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--ping) 55%, transparent);
+  background: color-mix(in srgb, var(--ping) 16%, var(--abyss));
+  color: var(--paper);
+  border-radius: 999px;
+  padding: 9px 14px; min-height: 38px;
+  font-size: 13px; font-weight: 600;
+  transition: background 0.14s, border-color 0.14s, transform 0.12s;
+}
+.checkin-btn:hover { background: color-mix(in srgb, var(--ping) 26%, var(--abyss)); }
+.checkin-btn:active { transform: translateY(1px); }
+.checkin-btn:disabled { opacity: 0.62; cursor: default; }
+.checkin-ico { color: var(--ping); font-size: 15px; line-height: 1; }
+
+.checkin--here { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.checkin-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--kelp); }
+.checkin-tick {
+  display: inline-grid; place-items: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--kelp); color: #06231d; font-size: 10px; font-weight: 800;
+}
+.checkin-out {
+  flex: 0 0 auto;
+  background: none; border: 1px solid var(--line-strong);
+  color: var(--paper-dim); border-radius: 999px;
+  padding: 6px 12px; min-height: 34px; font-size: 12.5px; font-weight: 600;
+}
+.checkin-out:hover { border-color: rgba(255, 107, 74, 0.5); color: var(--coral); }
+
+.checkin--far { display: flex; flex-direction: column; gap: 8px; }
+.checkin-far-msg { font-size: 12.5px; font-weight: 600; color: var(--coral); }
+.checkin-far-actions { display: flex; align-items: center; gap: 10px; }
+.checkin-retry {
+  background: none; border: 1px solid var(--line-strong); color: var(--paper);
+  border-radius: 999px; padding: 7px 13px; min-height: 34px; font-size: 12.5px; font-weight: 600;
+}
+.checkin-retry:hover { border-color: var(--ping); }
+.checkin-anyway {
+  margin-left: auto;
+  background: none; border: 0; color: var(--paper-dim);
+  font-size: 12px; font-weight: 600; padding: 4px 2px;
+}
+.checkin-anyway:hover { color: var(--paper); text-decoration: underline; }
+
+/* ============================================================
+   PRESENCE avatars (map) + who's-here popup
+   ============================================================ */
+.pres-wrap { background: none !important; border: none !important; }
+.pres { display: inline-flex; align-items: center; }
+.pres-av {
+  display: inline-grid; place-items: center;
+  width: 22px; height: 22px; margin-left: -7px;
+  border-radius: 50%;
+  background: var(--av, var(--ping));
+  color: #08222b;
+  border: 2px solid var(--abyss);
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.pres-av:first-child { margin-left: 0; }
+.pres-more {
+  display: inline-grid; place-items: center;
+  min-width: 20px; height: 20px; padding: 0 5px; margin-left: -5px;
+  border-radius: 999px;
+  background: var(--chart-2); color: var(--paper);
+  border: 2px solid var(--abyss);
+  font-family: var(--mono); font-size: 9px; font-weight: 700;
+}
+.pop-here { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.pop-here li { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--paper); }
+.pres-dot { width: 9px; height: 9px; border-radius: 50%; flex: 0 0 auto; background: var(--av, var(--ping)); box-shadow: 0 0 6px var(--av, var(--ping)); }
+.pres-nearby { font-family: var(--mono); font-size: 9.5px; color: var(--paper-faint); letter-spacing: 0.04em; }
+
+/* ============================================================
+   SCORES
+   ============================================================ */
+.scoresview { max-width: var(--maxw); margin: 0 auto; padding-bottom: 60px; }
+.segmented {
+  display: inline-flex; gap: 2px; margin-top: 4px;
+  background: var(--chart); border: 1px solid var(--line-strong);
+  border-radius: 999px; padding: 3px;
+}
+.segmented-btn {
+  background: none; border: 0; color: var(--paper-dim);
+  border-radius: 999px; padding: 7px 16px; font-size: 13px; font-weight: 600;
+  transition: background 0.14s, color 0.14s;
+}
+.segmented-btn--on { background: var(--paper); color: var(--abyss); }
+.scores-body { max-width: var(--maxw); margin: 0 auto; padding: 6px 20px 0; }
+.scores-empty { color: var(--paper-dim); font-size: 14.5px; padding: 24px 0; }
+.board {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 1px;
+  background: var(--line); border: 1px solid var(--line);
+  border-radius: var(--radius); overflow: hidden;
+}
+.board-row { display: flex; align-items: center; gap: 12px; background: var(--chart); padding: 13px 16px; }
+.board-row--me { background: color-mix(in srgb, var(--ping) 10%, var(--chart)); }
+.board-rank { flex: 0 0 auto; width: 20px; text-align: right; font-size: 13px; color: var(--paper-faint); }
+.board-dot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
+.board-name { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; }
+.board-you { color: var(--ping); font-size: 10px; background: rgba(56, 225, 255, 0.12); padding: 1px 6px; border-radius: 999px; }
+.board-badges { flex: 0 0 auto; display: inline-flex; gap: 3px; }
+.board-badge { font-size: 15px; line-height: 1; }
+.board-points { flex: 0 0 auto; min-width: 40px; margin-left: 4px; text-align: right; font-size: 15px; font-weight: 700; color: var(--paper); }
+
+/* ============================================================
+   TOASTS (realtime check-in notices)
+   ============================================================ */
+.toasts {
+  position: fixed;
+  top: calc(62px + env(safe-area-inset-top, 0px));
+  left: 50%; transform: translateX(-50%);
+  z-index: 2500;
+  display: flex; flex-direction: column; gap: 8px;
+  width: min(360px, calc(100vw - 28px));
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left;
+  background: rgba(14, 39, 50, 0.96);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--ping);
+  border-radius: 12px;
+  padding: 11px 14px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5);
+  color: var(--paper);
+  font-size: 13.5px; font-weight: 500;
+  animation: toastin 0.24s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.toast-ico { flex: 0 0 auto; color: var(--ping); font-size: 16px; }
+.toast-text { line-height: 1.35; }
+@keyframes toastin { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+
+/* ============================================================
    BOTTOM NAV (mobile only — hidden until the breakpoint)
    ============================================================ */
 .botnav { display: none; }
@@ -837,7 +982,7 @@ a { color: var(--kelp); }
   .tabs { display: none; }
   .botnav {
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(var(--tabcount, 5), 1fr);
     position: fixed; left: 0; right: 0; bottom: 0;
     z-index: 1200;
     background: rgba(11, 31, 42, 0.94);
@@ -896,6 +1041,12 @@ a { color: var(--kelp); }
   /* bigger tap targets for night-time thumbs */
   .votebtn { min-height: 40px; padding: 8px 15px; font-size: 14px; }
   .votebtn-heart { font-size: 16px; }
+  .checkin-btn { min-height: 44px; font-size: 14px; }
+  .checkin-out, .checkin-retry { min-height: 40px; }
+
+  /* six tabs in the bottom bar — trim so nothing clips */
+  .botnav-item { padding-left: 0; padding-right: 0; }
+  .botnav-label { font-size: 9.5px; letter-spacing: 0; }
 
   /* name picker becomes a bottom sheet */
   .nameprompt-backdrop { place-items: end center; padding: 0; }
