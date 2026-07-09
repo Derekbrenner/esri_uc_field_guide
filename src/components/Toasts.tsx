@@ -1,26 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Checkin, Squad, SquadMember } from '../lib/social'
+import type { Checkin, Meetup, Squad, SquadMember } from '../lib/social'
+import { formatMeetupTime } from '../lib/points'
 
 const DISMISS_MS = 5_000
 const MAX_VISIBLE = 4
 
-type ToastKind = 'checkin' | 'squad'
+type ToastKind = 'checkin' | 'squad' | 'meetup'
 type Toast = { id: string; text: string; kind: ToastKind }
 
 // Ephemeral, self-dismissing notices fired when *other* people do something on
-// the shared realtime streams: a check-in ("Erin checked in at Coin-Op …") or a
-// squad join ("Derek joined 🗺️ Team Basemap"). Each event is toasted once
-// (deduped), only if it landed after this component mounted and isn't the
-// user's own — the mount gate suppresses the backlog on first load / reconnect.
+// the shared realtime streams: a check-in ("Erin checked in at Coin-Op …"), a
+// squad join ("Derek joined 🗺️ Team Basemap"), or a new meetup ("Derek planned
+// a meetup: Waterfront Park @ 7:30"). Each event is toasted once (deduped), only
+// if it landed after this component mounted and isn't the user's own — the mount
+// gate suppresses the backlog on first load / reconnect.
 export default function Toasts({
   checkins,
   members = [],
   squads = [],
+  meetups = [],
   myId,
 }: {
   checkins: Checkin[]
   members?: SquadMember[]
   squads?: Squad[]
+  meetups?: Meetup[]
   myId: string
 }) {
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -88,6 +92,27 @@ export default function Toasts({
     push(fresh)
   }, [members, squads, myId])
 
+  // Meetup-creation toasts. A cancelled meetup never toasts (its create + cancel
+  // may both land before we render), and edits don't re-toast (keyed by id only).
+  useEffect(() => {
+    const fresh: Toast[] = []
+    for (const m of meetups) {
+      const key = `m:${m.id}`
+      if (seen.current.has(key)) continue
+      seen.current.add(key)
+      if (m.cancelled) continue
+      if (m.created_by_device === myId) continue // ignore own events
+      if (new Date(m.created_at).getTime() < mountedAt.current) continue
+      const time = formatMeetupTime(m.meet_at)
+      fresh.push({
+        id: key,
+        kind: 'meetup',
+        text: `${m.created_by_name || 'Someone'} planned a meetup: ${m.spot_name || 'a spot'}${time ? ` @ ${time}` : ''}`,
+      })
+    }
+    push(fresh)
+  }, [meetups, myId])
+
   useEffect(() => {
     const list = timers.current
     return () => list.forEach((t) => window.clearTimeout(t))
@@ -104,7 +129,9 @@ export default function Toasts({
           className={`toast toast--${t.kind}`}
           onClick={() => dismiss(t.id)}
         >
-          <span className="toast-ico" aria-hidden>{t.kind === 'squad' ? '🚩' : '◎'}</span>
+          <span className="toast-ico" aria-hidden>
+            {t.kind === 'squad' ? '🚩' : t.kind === 'meetup' ? '🕐' : '◎'}
+          </span>
           <span className="toast-text">{t.text}</span>
         </button>
       ))}

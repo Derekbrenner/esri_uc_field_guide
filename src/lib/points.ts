@@ -133,6 +133,26 @@ export function squadLocation(openSpotKeys: string[]): string | null {
   return bestN * 2 > openSpotKeys.length ? best : null
 }
 
+// --- Meetups (Phase 7) ------------------------------------------------------
+
+// Compact local time label for a meetup, e.g. "7:30 PM". Empty for no / bad time.
+export function formatMeetupTime(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+}
+
+// Day-aware label used on the upcoming-meetup banner: just the time when it's
+// today ("7:30 PM"), else prefixed with the weekday ("Mon · 7:30 PM").
+export function formatMeetupWhen(iso: string | null | undefined, now: number = Date.now()): string {
+  const t = formatMeetupTime(iso)
+  if (!t || !iso) return t
+  if (isSameLocalDay(iso, now)) return t
+  const wd = new Date(iso).toLocaleDateString([], { weekday: 'short' })
+  return `${wd} · ${t}`
+}
+
 // A squad's score (Phase 6): points from check-ins stamped with this squad
 // today. Each squad-stamped check-in contributes its verified/unverified value,
 // plus the first-of-crew bonus for any spot a member reached first crew-wide.

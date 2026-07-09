@@ -14,6 +14,7 @@ import {
 import { colorForId, type LiveState } from '../lib/useLiveLocations'
 import {
   useCheckins,
+  useMeetups,
   useNameGate,
   usePhotos,
   useSpots,
@@ -21,11 +22,13 @@ import {
   useVoteGate,
   type VotesApi,
 } from '../lib/useSocial'
-import { photoUrl, type Checkin, type Photo } from '../lib/social'
-import { squadLocation } from '../lib/points'
+import { photoUrl, type Checkin, type Meetup, type MeetupRsvp, type Photo } from '../lib/social'
+import { formatMeetupTime, squadLocation } from '../lib/points'
 import CheckInButton from './CheckInButton'
 import PhotoUpload from './PhotoUpload'
 import AddSpotPanel, { type SpotFields } from './AddSpotPanel'
+import MeetupPanel, { type MeetupFields } from './MeetupPanel'
+import MeetupBanner from './MeetupBanner'
 import SharePanel from './SharePanel'
 import NamePrompt from './NamePrompt'
 
@@ -33,6 +36,7 @@ type CheckinsApi = ReturnType<typeof useCheckins>
 type PhotosApi = ReturnType<typeof usePhotos>
 type SpotsApi = ReturnType<typeof useSpots>
 type SquadsApi = ReturnType<typeof useSquads>
+type MeetupsApi = ReturnType<typeof useMeetups>
 
 // A curated venue OR a user-added spot, normalized into one shape so every pin,
 // popup, vote, check-in, and photo path treats them identically. `spotKey` is
@@ -68,6 +72,9 @@ const VOTE_CAP = 8
 
 // Presence: only surface people whose open check-in is fresher than this.
 const PRESENCE_MAX_AGE_MS = 4 * 60 * 60 * 1000
+
+// Meetups drop off the map + banner this long after their start time.
+const MEETUP_STALE_MS = 2 * 60 * 60 * 1000
 
 // Strip characters that could break out of a CSS url('…') context. Supabase
 // public URLs never contain these, but keep the DivIcon HTML safe regardless.
@@ -239,6 +246,66 @@ function presencePopupHtml(spotName: string, people: Person[]): string {
   </div>`
 }
 
+// A distinct pulsing marker for a meetup, with an inline time + place label.
+function meetupIcon(timeLabel: string, spotName: string): L.DivIcon {
+  return L.divIcon({
+    className: 'meetuppin-wrap',
+    html: `<span class="meetuppin">
+        <span class="meetuppin-ring"></span>
+        <span class="meetuppin-core">🕐</span>
+        <span class="meetuppin-label"><b>${escapeHtml(timeLabel)}</b>${spotName ? ` — ${escapeHtml(spotName)}` : ''}</span>
+      </span>`,
+    iconSize: [30, 30],
+    iconAnchor: [15, 15],
+    popupAnchor: [0, -16],
+  })
+}
+
+// RSVP attendee chips (going) + counts for a meetup popup.
+function meetupRsvpsHtml(rsvps: MeetupRsvp[]): string {
+  const going = rsvps.filter((r) => r.going)
+  const out = rsvps.filter((r) => !r.going)
+  if (going.length === 0 && out.length === 0) {
+    return `<div class="meetup-rsvps-empty">No RSVPs yet</div>`
+  }
+  const chips = going
+    .slice(0, 6)
+    .map(
+      (r) =>
+        `<span class="meetup-av" style="--av:${colorForId(r.device_id)}" title="${escapeHtml(r.name || 'Someone')}">${escapeHtml(initials(r.name || ''))}</span>`,
+    )
+    .join('')
+  const more = going.length > 6 ? `<span class="meetup-avmore">+${going.length - 6}</span>` : ''
+  const goingLabel = going.length ? `<span class="meetup-going mono">${going.length} in</span>` : ''
+  const outLabel = out.length ? `<span class="meetup-out mono">${out.length} out</span>` : ''
+  return `<div class="meetup-rsvps"><span class="meetup-avs">${chips}${more}</span>${goingLabel}${outLabel}</div>`
+}
+
+function meetupPopupHtml(
+  m: Meetup,
+  rsvps: MeetupRsvp[],
+  myId: string,
+  squadNames: Map<string, { name: string; emoji: string | null }>,
+): string {
+  const time = formatMeetupTime(m.meet_at)
+  const squad = m.squad_id ? squadNames.get(m.squad_id) : null
+  const squadLabel = squad ? ` · ${squad.emoji ? `${squad.emoji} ` : ''}${escapeHtml(squad.name)}` : ''
+  const mine = rsvps.find((r) => r.device_id === myId)
+  const isCreator = m.created_by_device === myId
+  return `<div class="pop pop--meetup">
+    <div class="pop-cat mono">🕐 ${escapeHtml(time)}${squadLabel}</div>
+    <div class="pop-name">${escapeHtml(m.spot_name || 'Meetup')}</div>
+    ${m.note ? `<div class="pop-notes">${escapeHtml(m.note)}</div>` : ''}
+    <div class="meetup-by mono">planned by ${escapeHtml(m.created_by_name || 'Someone')}</div>
+    ${meetupRsvpsHtml(rsvps)}
+    <div class="meetup-actions">
+      <button type="button" class="meetup-in${mine?.going === true ? ' meetup-in--on' : ''}" data-rsvp-in="${escapeHtml(m.id)}">I’m in</button>
+      <button type="button" class="meetup-out-btn${mine?.going === false ? ' meetup-out-btn--on' : ''}" data-rsvp-out="${escapeHtml(m.id)}">Can’t make it</button>
+    </div>
+    ${isCreator ? `<button type="button" class="meetup-cancel" data-meetup-cancel="${escapeHtml(m.id)}">Cancel meetup</button>` : ''}
+  </div>`
+}
+
 // The vote control rendered inside a popup — an HTML twin of <VoteButton>.
 // Interactivity is handled by one delegated click listener on the map (below).
 function voteHtml(spotKey: string, count: number, mine: boolean): string {
@@ -255,6 +322,7 @@ function popupHtml(
   voteConfigured: boolean,
   checkinConfigured: boolean,
   photoConfigured: boolean,
+  meetupConfigured: boolean,
   canEdit: boolean,
 ): string {
   const dir = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}`
@@ -269,6 +337,7 @@ function popupHtml(
       ${voteConfigured ? voteHtml(s.spotKey, count, mine) : ''}
       <a class="pop-dir" href="${dir}" target="_blank" rel="noopener">Directions ↗</a>
     </div>
+    ${meetupConfigured ? `<button type="button" class="pop-meetup" data-meetup-plan="${escapeHtml(s.spotKey)}"><span class="pop-meetup-ico" aria-hidden>🕐</span> Plan meetup here</button>` : ''}
     ${checkinConfigured ? '<div class="checkin-mount"></div>' : ''}
     ${photoConfigured ? '<div class="photo-mount"></div>' : ''}
     ${
@@ -289,6 +358,7 @@ export default function MapView({
   photos,
   spots,
   squads,
+  meetups,
   focus,
   onFocusConsumed,
   onOpenSquads,
@@ -299,6 +369,7 @@ export default function MapView({
   photos: PhotosApi
   spots: SpotsApi
   squads: SquadsApi
+  meetups: MeetupsApi
   focus?: MapFocus | null
   onFocusConsumed?: () => void
   onOpenSquads?: () => void
@@ -308,9 +379,11 @@ export default function MapView({
   const venueLayer = useRef<L.LayerGroup | null>(null)
   const presenceLayer = useRef<L.LayerGroup | null>(null)
   const photoLayer = useRef<L.LayerGroup | null>(null)
+  const meetupLayer = useRef<L.LayerGroup | null>(null)
   const liveLayer = useRef<L.LayerGroup | null>(null)
   const draftMarker = useRef<L.Marker | null>(null)
   const markers = useRef<Map<string, { marker: L.Marker; spot: MapSpot }>>(new Map())
+  const meetupMarkers = useRef<Map<string, L.Marker>>(new Map())
 
   const [active, setActive] = useState<Set<SpotCategory>>(() => new Set(ALL_CATS))
   const [topVoted, setTopVoted] = useState(false)
@@ -334,14 +407,57 @@ export default function MapView({
     photoNode: HTMLElement | null
   } | null>(null)
 
+  // Plan-a-meetup flow: drop-a-pin mode (tap the map), the dropped point, or a
+  // spot launched from its popup ("Plan meetup here") with a fixed location.
+  const [meetupMode, setMeetupMode] = useState(false)
+  const [meetupPoint, setMeetupPoint] = useState<{ lat: number; lng: number } | null>(null)
+  const [meetupSpot, setMeetupSpot] = useState<{
+    spotKey: string
+    name: string
+    lat: number
+    lng: number
+  } | null>(null)
+
   const gate = useVoteGate(votes, live)
   const checkinGate = useNameGate(live)
   const photoGate = useNameGate(live)
   const spotGate = useNameGate(live)
+  const meetupGate = useNameGate(live)
+  const rsvpGate = useNameGate(live)
   const { countFor, hasMine, configured: voteConfigured } = votes
 
   const myOpen = checkins.openFor(live.myId)
   const mySquadId = squads.squadOf(live.myId)
+
+  // Resolve identity at action time (live.name can lag a just-saved name by a
+  // render; the name-gate writes localStorage synchronously). Mirrors SquadPanel.
+  const identityNow = () => ({
+    deviceId: live.myId,
+    name: (live.name || localStorage.getItem('sdfg.name') || 'Someone').trim() || 'Someone',
+  })
+
+  // RSVP to a meetup (from the banner or a pin popup), name-gated.
+  const doRsvp = (meetupId: string, going: boolean) => {
+    rsvpGate.request(() => meetups.rsvp(meetupId, going, identityNow()))
+  }
+
+  // Open the meetup planner anchored to a curated / user spot (from its popup).
+  const planMeetupFromSpot = (s: MapSpot) => {
+    setAddMode(false)
+    setEditingSpot(null)
+    setDraftPoint(null)
+    setMeetupMode(false)
+    setMeetupPoint(null)
+    setLocating(false)
+    setMeetupSpot({ spotKey: s.spotKey, name: s.name, lat: s.lat, lng: s.lng })
+  }
+
+  const closeMeetupFlow = () => {
+    setMeetupMode(false)
+    setMeetupPoint(null)
+    setMeetupSpot(null)
+    setLocating(false)
+  }
 
   // Ownership test for edit/delete affordances (adder only).
   const myIdRef = useRef(live.myId)
@@ -529,6 +645,42 @@ export default function MapView({
     })
   }, [squads.squads, squads.members, currentByDevice, spotByKey])
 
+  // --- Meetups: only the upcoming, un-cancelled ones, soonest first ----------
+  const activeMeetups = useMemo(() => {
+    const cutoff = Date.now() - MEETUP_STALE_MS
+    return meetups.meetups
+      .filter(
+        (m) =>
+          !m.cancelled &&
+          m.lat != null &&
+          m.lng != null &&
+          m.meet_at != null &&
+          new Date(m.meet_at).getTime() > cutoff,
+      )
+      .sort((a, b) => (a.meet_at ?? '').localeCompare(b.meet_at ?? ''))
+  }, [meetups.meetups])
+
+  // Rebuild meetup pins when the visible SET or a meetup's own fields change.
+  const meetupMembershipSig = useMemo(
+    () =>
+      activeMeetups
+        .map((m) => `${m.id}@${m.lat},${m.lng}#${m.meet_at}#${m.spot_name}#${m.note}#${m.squad_id}`)
+        .join('|'),
+    [activeMeetups],
+  )
+  // Refresh open meetup popups in place when RSVPs change (no marker teardown).
+  const meetupRsvpSig = useMemo(
+    () => meetups.rsvps.map((r) => `${r.meetup_id}:${r.device_id}:${r.going ? 1 : 0}`).join('|'),
+    [meetups.rsvps],
+  )
+
+  // Squad name/emoji lookup for meetup popups (target-squad label).
+  const squadNameById = useMemo(() => {
+    const m = new Map<string, { name: string; emoji: string | null }>()
+    for (const s of squads.squads) m.set(s.id, { name: s.name, emoji: s.emoji })
+    return m
+  }, [squads.squads])
+
   // Latest values for the imperative effects / listeners, kept in refs so the
   // effects don't need to re-run (and rebuild markers) on every render.
   const visibleRef = useRef(visibleSpots)
@@ -555,6 +707,20 @@ export default function MapView({
   coordPhotosRef.current = coordPhotos
   const removeSpotRef = useRef(spots.removeSpot)
   removeSpotRef.current = spots.removeSpot
+  const meetupConfiguredRef = useRef(meetups.configured)
+  meetupConfiguredRef.current = meetups.configured
+  const activeMeetupsRef = useRef(activeMeetups)
+  activeMeetupsRef.current = activeMeetups
+  const rsvpsForRef = useRef(meetups.rsvpsFor)
+  rsvpsForRef.current = meetups.rsvpsFor
+  const squadNameByIdRef = useRef(squadNameById)
+  squadNameByIdRef.current = squadNameById
+  const doRsvpRef = useRef(doRsvp)
+  doRsvpRef.current = doRsvp
+  const cancelMeetupRef = useRef(meetups.cancelMeetup)
+  cancelMeetupRef.current = meetups.cancelMeetup
+  const planMeetupFromSpotRef = useRef(planMeetupFromSpot)
+  planMeetupFromSpotRef.current = planMeetupFromSpot
 
   // Build a spot's marker icon from the *current* vote count + newest photo
   // thumbnail (both read via refs, so the imperative effects stay in sync).
@@ -590,6 +756,7 @@ export default function MapView({
     venueLayer.current = L.layerGroup().addTo(map)
     photoLayer.current = L.layerGroup().addTo(map)
     presenceLayer.current = L.layerGroup().addTo(map)
+    meetupLayer.current = L.layerGroup().addTo(map)
     liveLayer.current = L.layerGroup().addTo(map)
     mapRef.current = map
 
@@ -631,6 +798,47 @@ export default function MapView({
         if (s && window.confirm(`Delete “${s.name}”? This removes it for everyone.`)) {
           mapRef.current?.closePopup()
           removeSpotRef.current(s.spotKey)
+        }
+        return
+      }
+      // "Plan meetup here" in a spot popup → open the planner for that spot.
+      const planBtn = target.closest('[data-meetup-plan]') as HTMLElement | null
+      if (planBtn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const key = planBtn.getAttribute('data-meetup-plan')
+        const s = key ? spotByKeyRef.current.get(key) : null
+        if (s) {
+          mapRef.current?.closePopup()
+          planMeetupFromSpotRef.current(s)
+        }
+        return
+      }
+      // RSVP + cancel controls inside a meetup pin popup.
+      const rsvpInBtn = target.closest('[data-rsvp-in]') as HTMLElement | null
+      if (rsvpInBtn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const id = rsvpInBtn.getAttribute('data-rsvp-in')
+        if (id) doRsvpRef.current(id, true)
+        return
+      }
+      const rsvpOutBtn = target.closest('[data-rsvp-out]') as HTMLElement | null
+      if (rsvpOutBtn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const id = rsvpOutBtn.getAttribute('data-rsvp-out')
+        if (id) doRsvpRef.current(id, false)
+        return
+      }
+      const cancelMeetupBtn = target.closest('[data-meetup-cancel]') as HTMLElement | null
+      if (cancelMeetupBtn) {
+        e.preventDefault()
+        e.stopPropagation()
+        const id = cancelMeetupBtn.getAttribute('data-meetup-cancel')
+        if (id && window.confirm('Cancel this meetup? It disappears for everyone.')) {
+          mapRef.current?.closePopup()
+          cancelMeetupRef.current(id)
         }
         return
       }
@@ -681,7 +889,23 @@ export default function MapView({
     }
   }, [addMode])
 
-  // The transient drop-point marker follows draftPoint while in add mode.
+  // Meetup drop mode: same crosshair tap-to-drop, but sets the meetup point.
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !meetupMode) return
+    const container = map.getContainer()
+    container.classList.add('leaflet-adding')
+    const onMapClick = (e: L.LeafletMouseEvent) => {
+      setMeetupPoint({ lat: e.latlng.lat, lng: e.latlng.lng })
+    }
+    map.on('click', onMapClick)
+    return () => {
+      container.classList.remove('leaflet-adding')
+      map.off('click', onMapClick)
+    }
+  }, [meetupMode])
+
+  // The transient drop-point marker follows the pending point in either flow.
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
@@ -689,15 +913,16 @@ export default function MapView({
       map.removeLayer(draftMarker.current)
       draftMarker.current = null
     }
-    if (addMode && draftPoint) {
-      draftMarker.current = L.marker([draftPoint.lat, draftPoint.lng], {
+    const pending = addMode ? draftPoint : meetupMode ? meetupPoint : null
+    if (pending) {
+      draftMarker.current = L.marker([pending.lat, pending.lng], {
         icon: draftIcon(),
         zIndexOffset: 900,
         interactive: false,
         keyboard: false,
       }).addTo(map)
     }
-  }, [addMode, draftPoint])
+  }, [addMode, draftPoint, meetupMode, meetupPoint])
 
   // Rebuild pins only when the visible SET (or a user spot's content) changes.
   useEffect(() => {
@@ -720,6 +945,7 @@ export default function MapView({
             voteConfiguredRef.current,
             checkinConfiguredRef.current,
             photoConfiguredRef.current,
+            meetupConfiguredRef.current,
             canEditSpot(s),
           ),
         )
@@ -743,6 +969,7 @@ export default function MapView({
             voteConfiguredRef.current,
             checkinConfiguredRef.current,
             photoConfiguredRef.current,
+            meetupConfiguredRef.current,
             canEditSpot(spot),
           ),
         )
@@ -813,6 +1040,44 @@ export default function MapView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coordPhotoSig])
 
+  // Meetup pins: rebuild when the upcoming set (or a meetup's fields) changes.
+  useEffect(() => {
+    const layer = meetupLayer.current
+    if (!layer) return
+    layer.clearLayers()
+    meetupMarkers.current.clear()
+    for (const m of activeMeetupsRef.current) {
+      if (m.lat == null || m.lng == null) continue
+      const time = formatMeetupTime(m.meet_at)
+      const marker = L.marker([m.lat, m.lng], {
+        icon: meetupIcon(time, m.spot_name || 'Meetup'),
+        zIndexOffset: 700,
+        title: `${time} — ${m.spot_name || 'Meetup'}`,
+      })
+        .bindPopup(
+          meetupPopupHtml(m, rsvpsForRef.current(m.id), myIdRef.current, squadNameByIdRef.current),
+        )
+        .addTo(layer)
+      meetupMarkers.current.set(m.id, marker)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetupMembershipSig])
+
+  // Live RSVP updates: refresh any open meetup popup in place (no marker
+  // teardown, so a popup someone's reading stays open while chips tick).
+  useEffect(() => {
+    for (const [id, marker] of meetupMarkers.current) {
+      if (!marker.isPopupOpen()) continue
+      const m = activeMeetupsRef.current.find((x) => x.id === id)
+      if (m) {
+        marker.setPopupContent(
+          meetupPopupHtml(m, rsvpsForRef.current(m.id), myIdRef.current, squadNameByIdRef.current),
+        )
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meetupRsvpSig])
+
   // "Show on map" from the Pictures tab: fly to the photo's location on mount /
   // whenever a new focus is requested (the `at` nonce forces a re-fly), then
   // clear it so re-entering the Map tab doesn't re-fly to a stale spot.
@@ -872,11 +1137,11 @@ export default function MapView({
     if (coords && mapRef.current) mapRef.current.flyTo([coords.lat, coords.lng], 16, { duration: 0.8 })
   }
 
-  // "Use my location" while placing a spot: prefer the live dot, else a fresh
-  // GPS fix. Flies to the point and drops the draft pin there.
-  const useMyLocationForSpot = () => {
+  // "Use my location" while placing a spot / meetup: prefer the live dot, else a
+  // fresh GPS fix. Flies to the point and drops the pending pin there.
+  const locateAndDrop = (set: (pt: { lat: number; lng: number }) => void) => {
     const drop = (lat: number, lng: number) => {
-      setDraftPoint({ lat, lng })
+      set({ lat, lng })
       mapRef.current?.flyTo([lat, lng], 17, { duration: 0.6 })
     }
     if (live.me) {
@@ -893,6 +1158,17 @@ export default function MapView({
       () => setLocating(false),
       { enableHighAccuracy: true, maximumAge: 10_000, timeout: 15_000 },
     )
+  }
+  const useMyLocationForSpot = () => locateAndDrop(setDraftPoint)
+  const useMyLocationForMeetup = () => locateAndDrop(setMeetupPoint)
+
+  // Fly to a meetup's pulsing pin and open its popup (from the banner card).
+  const flyToMeetup = (id: string) => {
+    const marker = meetupMarkers.current.get(id)
+    if (marker && mapRef.current) {
+      mapRef.current.flyTo(marker.getLatLng(), 16, { duration: 0.8 })
+      marker.openPopup()
+    }
   }
 
   // A stable prefill for the form (memoized on the spot being edited so typing
@@ -937,10 +1213,51 @@ export default function MapView({
     })
   }
 
+  // Plan a meetup: coords come from the anchored spot or the dropped point.
+  // Attribute to the shared identity — prompt for a name first if unset.
+  const submitMeetup = (fields: MeetupFields) => {
+    const pt = meetupSpot ? { lat: meetupSpot.lat, lng: meetupSpot.lng } : meetupPoint
+    if (!pt) return
+    const spotKey = meetupSpot ? meetupSpot.spotKey : null
+    meetupGate.request(() => {
+      meetups
+        .createMeetup({
+          spot_key: spotKey,
+          spot_name: fields.spotName,
+          lat: pt.lat,
+          lng: pt.lng,
+          meet_at: fields.meetAt,
+          note: fields.note || null,
+          squad_id: fields.squadId,
+          created_by_device: live.myId,
+          created_by_name: identityNow().name,
+        })
+        .then(({ data }) => {
+          if (data && mapRef.current) mapRef.current.flyTo([pt.lat, pt.lng], 16, { duration: 0.6 })
+        })
+      closeMeetupFlow()
+    })
+  }
+
   const allOn = ALL_CATS.every((c) => active.has(c)) && !topVoted
 
   return (
     <div className="mapview">
+      {meetups.configured && activeMeetups.length > 0 && (
+        <MeetupBanner
+          meetups={activeMeetups}
+          rsvpsFor={meetups.rsvpsFor}
+          squads={squads.squads}
+          myId={live.myId}
+          onFly={flyToMeetup}
+          onRsvp={doRsvp}
+          onCancel={(id) => {
+            if (window.confirm('Cancel this meetup? It disappears for everyone.')) {
+              meetups.cancelMeetup(id)
+            }
+          }}
+        />
+      )}
       <div className="mapview-bar">
         <div className="filterscroll">
           <button
@@ -958,6 +1275,7 @@ export default function MapView({
               onClick={() => {
                 if (addMode) closeSpotFlow()
                 else {
+                  closeMeetupFlow()
                   setEditingSpot(null)
                   setDraftPoint(null)
                   setAddMode(true)
@@ -967,6 +1285,24 @@ export default function MapView({
             >
               <span className="chip-plus" aria-hidden>＋</span>
               Add spot
+            </button>
+          )}
+          {meetups.configured && (
+            <button
+              className={`chip chip--meetup${meetupMode || meetupSpot ? ' chip--on' : ''}`}
+              onClick={() => {
+                if (meetupMode || meetupSpot) closeMeetupFlow()
+                else {
+                  closeSpotFlow()
+                  setMeetupSpot(null)
+                  setMeetupPoint(null)
+                  setMeetupMode(true)
+                }
+              }}
+              aria-pressed={!!(meetupMode || meetupSpot)}
+            >
+              <span className="chip-clock" aria-hidden>🕐</span>
+              Plan meetup
             </button>
           )}
           {voteConfigured && votes.topKeys.length > 0 && (
@@ -1085,6 +1421,20 @@ export default function MapView({
           />
         )}
 
+        {(meetupMode || meetupSpot) && meetups.configured && (
+          <MeetupPanel
+            key={meetupSpot ? meetupSpot.spotKey : 'drop'}
+            fixedSpot={!!meetupSpot}
+            spotName={meetupSpot ? meetupSpot.name : ''}
+            point={meetupSpot ? { lat: meetupSpot.lat, lng: meetupSpot.lng } : meetupPoint}
+            locating={locating}
+            squads={squads.squads}
+            onUseMyLocation={useMyLocationForMeetup}
+            onSubmit={submitMeetup}
+            onClose={closeMeetupFlow}
+          />
+        )}
+
         {/* Prominent "add a photo here" while checked in somewhere. */}
         {photos.configured && myOpen && (
           <div className="map-photo-fab">
@@ -1157,6 +1507,22 @@ export default function MapView({
         title="Who’s adding this spot?"
         lede="Pick your name so the crew knows who put this on the map. Saved on this device only."
         cta="Save & add spot"
+      />
+      <NamePrompt
+        open={meetupGate.promptOpen}
+        onSave={meetupGate.resolve}
+        onCancel={meetupGate.cancel}
+        title="Who’s planning this meetup?"
+        lede="Pick your name so the crew knows who called it. Saved on this device only."
+        cta="Save & plan meetup"
+      />
+      <NamePrompt
+        open={rsvpGate.promptOpen}
+        onSave={rsvpGate.resolve}
+        onCancel={rsvpGate.cancel}
+        title="Who’s RSVPing?"
+        lede="Pick your name so the crew knows who’s coming. Saved on this device only."
+        cta="Save & RSVP"
       />
     </div>
   )

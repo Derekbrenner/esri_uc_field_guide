@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useLiveLocations } from './lib/useLiveLocations'
-import { useCheckins, usePhotos, useSpots, useSquads, useVotes } from './lib/useSocial'
+import { useCheckins, useMeetups, usePhotos, useSpots, useSquads, useVotes } from './lib/useSocial'
 import Hero from './components/Hero'
 import MapView, { type MapFocus } from './components/MapView'
 import FoodView from './components/FoodView'
@@ -47,6 +47,9 @@ export default function App() {
   // Squads (Phase 6): shared across the map legend, the Scores board, the squad
   // panel, and the join toasts — one subscription for the whole app.
   const squads = useSquads()
+  // Meetups (Phase 7): shared by the map (pins + banner + create) and the
+  // creation toasts — one realtime subscription each for meetups + RSVPs.
+  const meetups = useMeetups()
   // The squad create/join sheet, opened from the Map legend or the Scores tab.
   const [squadsOpen, setSquadsOpen] = useState(false)
 
@@ -120,6 +123,7 @@ export default function App() {
             photos={photos}
             spots={spots}
             squads={squads}
+            meetups={meetups}
             focus={mapFocus}
             onFocusConsumed={() => setMapFocus(null)}
             onOpenSquads={() => setSquadsOpen(true)}
@@ -172,6 +176,7 @@ export default function App() {
           checkins={checkins.checkins}
           members={squads.members}
           squads={squads.squads}
+          meetups={meetups.meetups}
           myId={live.myId}
         />
       )}
