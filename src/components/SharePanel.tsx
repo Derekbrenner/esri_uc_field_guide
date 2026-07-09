@@ -4,7 +4,10 @@ import { attendeeNames } from '../data/attendees'
 
 export default function SharePanel({ live, onRecenter }: { live: LiveState; onRecenter: () => void }) {
   const [draft, setDraft] = useState(live.name)
-  const [open, setOpen] = useState(true)
+  // Start collapsed on phones (map stays visible); open on larger screens.
+  const [open, setOpen] = useState(
+    () => !(typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches),
+  )
 
   const liveCount = live.others.length + (live.me ? 1 : 0)
 

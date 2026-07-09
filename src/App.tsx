@@ -1,13 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ComponentType } from 'react'
 import { useLiveLocations } from './lib/useLiveLocations'
 import Hero from './components/Hero'
 import MapView from './components/MapView'
 import FoodView from './components/FoodView'
 import ScheduleView from './components/ScheduleView'
 import CrewView from './components/CrewView'
+import { CalendarIcon, CompassIcon, CrewIcon, CupIcon, PinIcon } from './components/icons'
 
 const TABS = ['Guide', 'Map', 'Food & Drink', 'Schedule', 'Crew'] as const
 export type Tab = (typeof TABS)[number]
+
+// Short labels + icons for the mobile bottom bar.
+const TAB_META: Record<Tab, { short: string; Icon: ComponentType<{ className?: string }> }> = {
+  Guide: { short: 'Guide', Icon: CompassIcon },
+  Map: { short: 'Map', Icon: PinIcon },
+  'Food & Drink': { short: 'Food', Icon: CupIcon },
+  Schedule: { short: 'Plan', Icon: CalendarIcon },
+  Crew: { short: 'Crew', Icon: CrewIcon },
+}
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('Guide')
@@ -31,6 +41,7 @@ export default function App() {
   }
 
   const liveCount = live.others.length + (live.me ? 1 : 0)
+  const showBadge = live.configured && liveCount > 0
 
   return (
     <div className="app">
@@ -52,7 +63,7 @@ export default function App() {
               aria-current={tab === t ? 'page' : undefined}
             >
               {t}
-              {t === 'Map' && live.configured && liveCount > 0 && (
+              {t === 'Map' && showBadge && (
                 <span className="tab-badge" title={`${liveCount} sharing now`}>{liveCount}</span>
               )}
             </button>
@@ -72,6 +83,28 @@ export default function App() {
         <span className="mono">32.7065° N, 117.1610° W</span>
         <span>San Diego Convention Center · The crew’s field guide to Esri UC 2026</span>
       </footer>
+
+      {/* Thumb-reachable bottom nav — mobile only (CSS-gated). */}
+      <nav className="botnav" aria-label="Sections">
+        {TABS.map((t) => {
+          const { short, Icon } = TAB_META[t]
+          const isMap = t === 'Map'
+          return (
+            <button
+              key={t}
+              className={`botnav-item${tab === t ? ' botnav-item--active' : ''}`}
+              onClick={() => go(t)}
+              aria-current={tab === t ? 'page' : undefined}
+            >
+              <span className="botnav-ico">
+                <Icon />
+                {isMap && showBadge && <span className="botnav-badge">{liveCount}</span>}
+              </span>
+              <span className="botnav-label">{short}</span>
+            </button>
+          )
+        })}
+      </nav>
     </div>
   )
 }
