@@ -1,9 +1,10 @@
 import type { Tab } from '../App'
 import type { LiveState } from '../lib/useLiveLocations'
 import { schedule, tips } from '../data/schedule'
-import { venues } from '../data/venues'
+import { hubVenue, venueKey, venues } from '../data/venues'
 import { crew } from '../data/attendees'
 import Contours from './Contours'
+import { ConventionIcon } from './icons'
 
 const TODAY_ISO = '2026-07-09' // wired to the trip; today = day before arrivals begin
 
@@ -13,10 +14,19 @@ function daysUntil(iso: string): number {
   return Math.round((b.getTime() - a.getTime()) / 86_400_000)
 }
 
-export default function Hero({ onNav, live }: { onNav: (t: Tab) => void; live: LiveState }) {
+export default function Hero({
+  onNav,
+  live,
+  onShowSpot,
+}: {
+  onNav: (t: Tab) => void
+  live: LiveState
+  onShowSpot: (spotKey: string) => void
+}) {
+  const hub = hubVenue
   const spotCount = venues.filter((v) => !v.landmark).length
   const crewCount = crew.reduce((n, g) => n + g.people.length, 0)
-  const liveCount = live.others.length + (live.me ? 1 : 0)
+  const liveCount = live.liveCount
 
   // The next day on the itinerary from "today".
   const upcoming = schedule.find((d) => daysUntil(d.iso) >= 0) ?? schedule[schedule.length - 1]
@@ -91,6 +101,24 @@ export default function Hero({ onNav, live }: { onNav: (t: Tab) => void; live: L
           </div>
         </dl>
       </div>
+
+      {hub && (
+        <div className="hub-card">
+          <span className="hub-badge" aria-hidden>
+            <ConventionIcon />
+          </span>
+          <div className="hub-body">
+            <p className="hub-eyebrow">Home base</p>
+            <h2 className="hub-name">{hub.name}</h2>
+            <p className="hub-notes">{hub.notes}</p>
+            {hub.schedule && <p className="hub-sched">📌 {hub.schedule}</p>}
+          </div>
+          <button className="btn btn--primary hub-map" onClick={() => onShowSpot(venueKey(hub))}>
+            Show on map
+            <span className="btn-arrow" aria-hidden>→</span>
+          </button>
+        </div>
+      )}
 
       <div className="hero-cards">
         <NavCard

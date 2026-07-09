@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
 import { schedule } from '../data/schedule'
 import { categoryOrder, venues, venueKey } from '../data/venues'
-import { useScheduleItems } from '../lib/useSocial'
-import type { ScheduleItemRow, Spot } from '../lib/social'
-import type { LiveState } from '../lib/useLiveLocations'
+import { useScheduleItems, useNameGate, useMeetups } from '../lib/useSocial'
+import type { Meetup, MeetupRsvp, ScheduleItemRow, Spot } from '../lib/social'
+import { colorForId, type LiveState } from '../lib/useLiveLocations'
+import { formatMeetupTime } from '../lib/points'
+import NamePrompt from './NamePrompt'
 
 const TODAY_ISO = '2026-07-09'
 
@@ -16,8 +18,13 @@ type Draft = {
   spot_key: string | null
 }
 
+type MeetupsApi = ReturnType<typeof useMeetups>
+
 type ScheduleViewProps = {
   live: LiveState
+  // The shared meetups stream — woven into the itinerary as special, highlighted
+  // rows on their day so the crew can RSVP straight from the calendar.
+  meetups: MeetupsApi
   // Fly the map to a linked spot (curated venue or user-added). Resolved in App
   // where the user-spots list lives; ScheduleView only offers keys it can resolve.
   onShowSpot: (spotKey: string) => void
@@ -27,8 +34,28 @@ type ScheduleViewProps = {
 // Itinerary. Editable + live when Supabase is configured (backed by the
 // `schedule_items` table, seeded from src/data/schedule.ts). Falls back to the
 // hardcoded, richly-grouped schedule when there's no backend.
-export default function ScheduleView({ live, onShowSpot, userSpots }: ScheduleViewProps) {
+export default function ScheduleView({ live, meetups, onShowSpot, userSpots }: ScheduleViewProps) {
   const { configured, items, addItem, editItem, removeItem } = useScheduleItems()
+  // RSVPing from the calendar needs an identity, exactly like the map does.
+  const rsvpGate = useNameGate(live)
+
+  // Un-cancelled, dated meetups — grouped into the itinerary by their local day.
+  const activeMeetups = useMemo(
+    () => meetups.meetups.filter((m) => !m.cancelled && m.meet_at != null),
+    [meetups.meetups],
+  )
+
+  // Resolve identity at action time (live.name can lag a just-saved name by a
+  // render; the name-gate writes localStorage synchronously). Mirrors MapView.
+  const identityNow = () => ({
+    deviceId: live.myId,
+    name: (live.name || localStorage.getItem('sdfg.name') || 'Someone').trim() || 'Someone',
+  })
+  const doRsvp = (meetupId: string, going: boolean) =>
+    rsvpGate.request(() => meetups.rsvp(meetupId, going, identityNow()))
+  const doCancelMeetup = (id: string) => {
+    if (window.confirm('Cancel this meetup? It disappears for everyone.')) meetups.cancelMeetup(id)
+  }
 
   if (!configured) return <ScheduleStatic />
 
@@ -44,14 +71,29 @@ export default function ScheduleView({ live, onShowSpot, userSpots }: ScheduleVi
   const remove = (id: string) => removeItem(id)
 
   return (
-    <ScheduleEditable
-      items={items}
-      userSpots={userSpots}
-      add={add}
-      edit={edit}
-      remove={remove}
-      onShowSpot={onShowSpot}
-    />
+    <>
+      <ScheduleEditable
+        items={items}
+        meetups={activeMeetups}
+        rsvpsFor={meetups.rsvpsFor}
+        myId={live.myId}
+        onRsvp={doRsvp}
+        onCancelMeetup={doCancelMeetup}
+        userSpots={userSpots}
+        add={add}
+        edit={edit}
+        remove={remove}
+        onShowSpot={onShowSpot}
+      />
+      <NamePrompt
+        open={rsvpGate.promptOpen}
+        onSave={rsvpGate.resolve}
+        onCancel={rsvpGate.cancel}
+        title="Who’s RSVPing?"
+        lede="Pick your name so the crew knows who’s in. Saved on this device only."
+        cta="Save & RSVP"
+      />
+    </>
   )
 }
 
@@ -132,6 +174,11 @@ function ScheduleStatic() {
 // --------------------------------------------------------------------------
 type EditableProps = {
   items: ScheduleItemRow[]
+  meetups: Meetup[]
+  rsvpsFor: (meetupId: string) => MeetupRsvp[]
+  myId: string
+  onRsvp: (meetupId: string, going: boolean) => void
+  onCancelMeetup: (id: string) => void
   userSpots: Spot[]
   add: (d: Draft) => Promise<void>
   edit: (id: string, d: Draft) => Promise<void>
@@ -139,12 +186,24 @@ type EditableProps = {
   onShowSpot: (spotKey: string) => void
 }
 
-function ScheduleEditable({ items, userSpots, add, edit, remove, onShowSpot }: EditableProps) {
+function ScheduleEditable({
+  items,
+  meetups,
+  rsvpsFor,
+  myId,
+  onRsvp,
+  onCancelMeetup,
+  userSpots,
+  add,
+  edit,
+  remove,
+  onShowSpot,
+}: EditableProps) {
   const [editingId, setEditingId] = useState<string | null>(null)
   // null = add form closed; object = open (with an optional preset day).
   const [addFor, setAddFor] = useState<{ day: string | null } | null>(null)
 
-  const days = useMemo(() => groupByDay(items), [items])
+  const days = useMemo(() => groupByDay(items, meetups), [items, meetups])
 
   // Everything a linked spot_key can resolve to: curated venues + user spots
   // with coordinates. Drives both the "show on map" button and the picker.
@@ -168,7 +227,8 @@ function ScheduleEditable({ items, userSpots, add, edit, remove, onShowSpot }: E
         <p className="section-eyebrow">The week</p>
         <h1 className="view-title">Eight days, plotted.</h1>
         <p className="view-lede">
-          Live itinerary — anyone can add or edit. Link a spot to jump straight to it on the map.
+          Live itinerary — anyone can add or edit. <span className="legend-meetup">Meetups</span> land on
+          their day: RSVP right here.
         </p>
         {!addFor && (
           <button className="btn btn--ghost btn--sm crew-add" onClick={() => setAddFor({ day: null })}>
@@ -204,6 +264,18 @@ function ScheduleEditable({ items, userSpots, add, edit, remove, onShowSpot }: E
               <div className="day-body">
                 <div className="block">
                   <ul className="block-items">
+                    {grp.meetups.map((m) => (
+                      <MeetupRow
+                        key={m.id}
+                        m={m}
+                        rsvps={rsvpsFor(m.id)}
+                        myId={myId}
+                        spotIndex={spotIndex}
+                        onRsvp={onRsvp}
+                        onCancel={onCancelMeetup}
+                        onShowSpot={onShowSpot}
+                      />
+                    ))}
                     {grp.items.map((it) =>
                       editingId === it.id ? (
                         <li key={it.id} className="block-item block-item--form">
@@ -263,6 +335,105 @@ function ScheduleEditable({ items, userSpots, add, edit, remove, onShowSpot }: E
         })}
       </ol>
     </section>
+  )
+}
+
+// --------------------------------------------------------------------------
+// Meetup row — a meetup woven into a day, highlighted as special, with the same
+// RSVP + cancel controls the map banner offers so nobody has to leave the plan.
+// --------------------------------------------------------------------------
+function MeetupRow({
+  m,
+  rsvps,
+  myId,
+  spotIndex,
+  onRsvp,
+  onCancel,
+  onShowSpot,
+}: {
+  m: Meetup
+  rsvps: MeetupRsvp[]
+  myId: string
+  spotIndex: Map<string, string>
+  onRsvp: (meetupId: string, going: boolean) => void
+  onCancel: (id: string) => void
+  onShowSpot: (spotKey: string) => void
+}) {
+  const going = rsvps.filter((r) => r.going)
+  const mine = rsvps.find((r) => r.device_id === myId)
+  const isCreator = m.created_by_device === myId
+  const time = formatMeetupTime(m.meet_at)
+  const canShowOnMap = !!m.spot_key && spotIndex.has(m.spot_key)
+
+  return (
+    <li className="block-item sched-meetup">
+      <div className="sched-meetup-head">
+        {time && <span className="block-time mono sched-meetup-time">{time}</span>}
+        <span className="sched-meetup-tag">🕐 Meetup</span>
+        {mine?.going === true && <span className="sched-meetup-yourein">You’re in</span>}
+      </div>
+
+      <div className="sched-meetup-main">
+        <span className="block-text">
+          {m.spot_name || 'Meetup'}
+          {m.note && <span className="block-detail"> — {m.note}</span>}
+          {canShowOnMap && (
+            <button className="sched-map" onClick={() => onShowSpot(m.spot_key!)}>
+              <span aria-hidden>📍</span> Show on map
+            </button>
+          )}
+        </span>
+        <span className="sched-meetup-by mono">by {m.created_by_name || 'Someone'}</span>
+      </div>
+
+      <div className="sched-meetup-foot">
+        <span className="meetupcard-avs" aria-hidden>
+          {going.length === 0 ? (
+            <span className="meetupcard-nogo mono">No RSVPs yet</span>
+          ) : (
+            <>
+              {going.slice(0, 5).map((r) => (
+                <span
+                  key={r.device_id}
+                  className="meetup-av"
+                  style={{ ['--av' as string]: colorForId(r.device_id) }}
+                  title={r.name || 'Someone'}
+                >
+                  {initials(r.name)}
+                </span>
+              ))}
+              {going.length > 5 && <span className="meetup-avmore">+{going.length - 5}</span>}
+            </>
+          )}
+        </span>
+        <span className="meetupcard-rsvp">
+          <button
+            type="button"
+            className={`meetup-in${mine?.going === true ? ' meetup-in--on' : ''}`}
+            onClick={() => onRsvp(m.id, true)}
+          >
+            I’m in
+          </button>
+          <button
+            type="button"
+            className={`meetup-out-btn${mine?.going === false ? ' meetup-out-btn--on' : ''}`}
+            onClick={() => onRsvp(m.id, false)}
+          >
+            Can’t
+          </button>
+        </span>
+      </div>
+
+      {isCreator && (
+        <button
+          type="button"
+          className="meetupcard-cancel sched-meetup-cancel"
+          onClick={() => onCancel(m.id)}
+        >
+          Cancel meetup
+        </button>
+      )}
+    </li>
   )
 }
 
@@ -401,20 +572,48 @@ function ScheduleForm({
 // --------------------------------------------------------------------------
 // helpers
 // --------------------------------------------------------------------------
-function groupByDay(items: ScheduleItemRow[]): { day: string | null; items: ScheduleItemRow[] }[] {
+type DayGroup = { day: string | null; items: ScheduleItemRow[]; meetups: Meetup[] }
+
+// Merge schedule items and meetups into one per-day timeline. Items sort by their
+// stored order; meetups by their start time. Days with only a meetup still show.
+function groupByDay(items: ScheduleItemRow[], meetups: Meetup[]): DayGroup[] {
   const NULL_KEY = '~' // ASCII after digits, so undated items sort to the end
-  const map = new Map<string, ScheduleItemRow[]>()
+  const itemMap = new Map<string, ScheduleItemRow[]>()
   for (const it of items) {
     const key = it.day ?? NULL_KEY
-    if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push(it)
+    if (!itemMap.has(key)) itemMap.set(key, [])
+    itemMap.get(key)!.push(it)
   }
-  return Array.from(map.keys())
+  const meetMap = new Map<string, Meetup[]>()
+  for (const m of meetups) {
+    const key = localDayOf(m.meet_at) ?? NULL_KEY
+    if (!meetMap.has(key)) meetMap.set(key, [])
+    meetMap.get(key)!.push(m)
+  }
+  const keys = new Set<string>([...itemMap.keys(), ...meetMap.keys()])
+  return Array.from(keys)
     .sort()
     .map((k) => ({
       day: k === NULL_KEY ? null : k,
-      items: map.get(k)!.slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)),
+      items: (itemMap.get(k) ?? []).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)),
+      meetups: (meetMap.get(k) ?? [])
+        .slice()
+        .sort((a, b) => (a.meet_at ?? '').localeCompare(b.meet_at ?? '')),
     }))
+}
+
+// The local calendar day (YYYY-MM-DD) a meetup's start time falls on — matches
+// the day a creator picked in the local-time datetime picker.
+function localDayOf(iso: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+function initials(name: string | null | undefined): string {
+  return (name || '?').trim().slice(0, 2).toUpperCase() || '?'
 }
 
 function fmtDate(iso: string): string {

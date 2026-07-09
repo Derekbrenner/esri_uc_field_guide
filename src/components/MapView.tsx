@@ -28,7 +28,6 @@ import CheckInButton from './CheckInButton'
 import PhotoUpload from './PhotoUpload'
 import AddSpotPanel, { type SpotFields } from './AddSpotPanel'
 import MeetupPanel, { type MeetupFields } from './MeetupPanel'
-import MeetupBanner from './MeetupBanner'
 import SharePanel from './SharePanel'
 import NamePrompt from './NamePrompt'
 
@@ -51,14 +50,17 @@ type MapSpot = {
   lat: number
   lng: number
   landmark: boolean
+  hub: boolean
   userAdded: boolean
   addedByName: string | null
   addedByDevice: string | null
 }
 
 // Where "Show on map" flies to. `at` is a nonce so re-picking the same spot
-// re-fires the effect.
-export type MapFocus = { lat: number; lng: number; at: number }
+// re-fires the effect. `spotKey`, when known, targets the exact marker to open
+// (several downtown venues share near-identical coords, so matching by position
+// alone can open a neighbor's popup).
+export type MapFocus = { lat: number; lng: number; at: number; spotKey?: string }
 
 const CENTER: [number, number] = [32.7108, -117.1605]
 
@@ -73,7 +75,7 @@ const VOTE_CAP = 8
 // Presence: only surface people whose open check-in is fresher than this.
 const PRESENCE_MAX_AGE_MS = 4 * 60 * 60 * 1000
 
-// Meetups drop off the map + banner this long after their start time.
+// Meetups drop off the map this long after their start time.
 const MEETUP_STALE_MS = 2 * 60 * 60 * 1000
 
 // Strip characters that could break out of a CSS url('…') context. Supabase
@@ -82,9 +84,29 @@ function cssUrl(url: string): string {
   return url.replace(/[\\'")]/g, '')
 }
 
+// The home-base convention-center building glyph, drawn inside the hub pin so it
+// reads as a place, not just a colored dot. Mirrors ConventionIcon in icons.tsx.
+const HUB_GLYPH =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 4l9 5.5"/><path d="M4.5 9.5v9M19.5 9.5v9"/><path d="M8 11v6M12 11v6M16 11v6"/><path d="M3 20.5h18"/></svg>'
+
 function spotIcon(s: MapSpot, voteCount: number, thumbUrl?: string): L.DivIcon {
   const color = colorForCategory(s.category)
   const capped = Math.min(voteCount, VOTE_CAP)
+
+  // Home base gets a bigger, badge-shaped pin with the building glyph and a
+  // pulsing halo so it's unmistakably the anchor of the whole map.
+  if (s.hub) {
+    const badge = voteCount > 0 ? `<b class="pin-votes mono">${voteCount > 99 ? '99+' : voteCount}</b>` : ''
+    const box = 52
+    return L.divIcon({
+      className: 'pin-wrap',
+      html: `<span class="pin pin--hub${voteCount > 0 ? ' pin--voted' : ''}" style="--pin:${color};--pinv:${Math.min(capped, 4)}">${HUB_GLYPH}${badge}</span>`,
+      iconSize: [box, box],
+      iconAnchor: [box / 2, box / 2],
+      popupAnchor: [0, -box / 2 + 4],
+    })
+  }
+
   const size = 16 + capped * 1.6 // 16 → ~29px
   const box = size + 10 // padding for the glow ring + count badge
   const badge = voteCount > 0 ? `<b class="pin-votes mono">${voteCount > 99 ? '99+' : voteCount}</b>` : ''
@@ -189,14 +211,22 @@ function SpotPhotos({
   )
 }
 
-function liveIcon(name: string, color: string, isMe: boolean): L.DivIcon {
-  const initials = name.trim().slice(0, 2).toUpperCase() || '??'
+function liveIcon(p: {
+  name: string
+  color: string
+  isMe: boolean
+  live: boolean
+  seenLabel: string
+  opacity: number
+}): L.DivIcon {
+  const initials = p.name.trim().slice(0, 2).toUpperCase() || '??'
+  const seen = p.live ? '' : `<span class="live-seen">${escapeHtml(p.seenLabel)}</span>`
   return L.divIcon({
     className: 'live-wrap',
-    html: `<span class="live-dot${isMe ? ' live-dot--me' : ''}" style="--dot:${color}">
+    html: `<span class="live-dot${p.isMe ? ' live-dot--me' : ''}${p.live ? '' : ' live-dot--stale'}" style="--dot:${p.color};opacity:${p.opacity.toFixed(2)}">
         <span class="live-ring"></span>
         <span class="live-core">${initials}</span>
-        <span class="live-label">${escapeHtml(name)}${isMe ? ' · you' : ''}</span>
+        <span class="live-label">${escapeHtml(p.name)}${p.isMe ? ' · you' : ''}${seen}</span>
       </span>`,
     iconSize: [26, 26],
     iconAnchor: [13, 13],
@@ -476,6 +506,7 @@ export default function MapView({
         lat: v.lat,
         lng: v.lng,
         landmark: !!v.landmark,
+        hub: !!v.hub,
         userAdded: false,
         addedByName: null,
         addedByDevice: null,
@@ -496,6 +527,7 @@ export default function MapView({
           lat: s.lat as number,
           lng: s.lng as number,
           landmark: false,
+          hub: false,
           userAdded: true,
           addedByName: s.added_by_name,
           addedByDevice: s.added_by_device,
@@ -1083,7 +1115,13 @@ export default function MapView({
   // clear it so re-entering the Map tab doesn't re-fly to a stale spot.
   // Open the popup of the spot (or coordinate-only photo) marker sitting at the
   // given coordinates, so "View on map" arrives with the tooltip already open.
-  const openPopupAt = (lat: number, lng: number) => {
+  const openPopupAt = (lat: number, lng: number, spotKey?: string) => {
+    // Prefer the exact marker when we know which spot was picked.
+    const exact = spotKey ? markers.current.get(spotKey) : undefined
+    if (exact) {
+      exact.marker.openPopup()
+      return
+    }
     const near = (a: number, b: number) => Math.abs(a - b) < 1e-4
     for (const { marker, spot } of markers.current.values()) {
       if (near(spot.lat, lat) && near(spot.lng, lng)) {
@@ -1101,8 +1139,15 @@ export default function MapView({
 
   useEffect(() => {
     if (!focus || !mapRef.current) return
-    mapRef.current.flyTo([focus.lat, focus.lng], 17, { duration: 0.9 })
-    openPopupAt(focus.lat, focus.lng)
+    const map = mapRef.current
+    const zoom = 17
+    // Popups open *upward* from the marker, so a dead-center marker pushes the
+    // tooltip off the top of the screen. Bias the fly target north of the spot
+    // so the pin lands in the lower third — leaving room for the popup above it.
+    const markerPt = map.project([focus.lat, focus.lng], zoom)
+    const center = map.unproject(markerPt.subtract([0, map.getSize().y * 0.24]), zoom)
+    map.flyTo(center, zoom, { duration: 0.9 })
+    openPopupAt(focus.lat, focus.lng, focus.spotKey)
     onFocusConsumed?.()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus?.at, focus?.lat, focus?.lng])
@@ -1122,28 +1167,31 @@ export default function MapView({
     if (topVoted && votes.topKeys.length === 0) setTopVoted(false)
   }, [topVoted, votes.topKeys.length])
 
-  // render live dots when they change
+  // render live + last-seen dots when they change. The key folds in each
+  // person's tier and "seen" label so stale dots repaint as their age ticks
+  // over (e.g. "1h ago" → "2h ago") without churning on every render.
   const liveKey = useMemo(
     () =>
-      [...live.others, ...(live.me ? [live.me] : [])]
-        .map((l) => `${l.id}:${l.lat.toFixed(4)},${l.lng.toFixed(4)}`)
+      live.people
+        .map((p) => `${p.key}:${p.lat.toFixed(4)},${p.lng.toFixed(4)}:${p.live ? 'L' : p.seenLabel}`)
         .join('|'),
-    [live.others, live.me],
+    [live.people],
   )
   useEffect(() => {
     const layer = liveLayer.current
     if (!layer) return
     layer.clearLayers()
-    const dots = [...live.others]
-    if (live.me) dots.push(live.me)
-    dots.forEach((d) => {
-      const isMe = d.id === live.myId
-      L.marker([d.lat, d.lng], { icon: liveIcon(d.name, d.color, isMe), zIndexOffset: isMe ? 1000 : 500 })
-        .bindPopup(`<div class="pop"><div class="pop-name">${escapeHtml(d.name)}${isMe ? ' (you)' : ''}</div><div class="pop-notes">Live location</div></div>`)
+    live.people.forEach((p) => {
+      const notes = p.live ? 'Live location' : `Last seen ${escapeHtml(p.seenLabel)}`
+      L.marker([p.lat, p.lng], {
+        icon: liveIcon(p),
+        zIndexOffset: p.isMe ? 1000 : p.live ? 500 : 300,
+      })
+        .bindPopup(`<div class="pop"><div class="pop-name">${escapeHtml(p.name)}${p.isMe ? ' (you)' : ''}</div><div class="pop-notes">${notes}</div></div>`)
         .addTo(layer)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveKey, live.myId])
+  }, [liveKey])
 
   const toggle = (c: SpotCategory) => {
     setTopVoted(false)
@@ -1190,15 +1238,6 @@ export default function MapView({
   }
   const useMyLocationForSpot = () => locateAndDrop(setDraftPoint)
   const useMyLocationForMeetup = () => locateAndDrop(setMeetupPoint)
-
-  // Fly to a meetup's pulsing pin and open its popup (from the banner card).
-  const flyToMeetup = (id: string) => {
-    const marker = meetupMarkers.current.get(id)
-    if (marker && mapRef.current) {
-      mapRef.current.flyTo(marker.getLatLng(), 16, { duration: 0.8 })
-      marker.openPopup()
-    }
-  }
 
   // A stable prefill for the form (memoized on the spot being edited so typing
   // isn't reset every render).
@@ -1272,21 +1311,6 @@ export default function MapView({
 
   return (
     <div className="mapview">
-      {meetups.configured && activeMeetups.length > 0 && (
-        <MeetupBanner
-          meetups={activeMeetups}
-          rsvpsFor={meetups.rsvpsFor}
-          squads={squads.squads}
-          myId={live.myId}
-          onFly={flyToMeetup}
-          onRsvp={doRsvp}
-          onCancel={(id) => {
-            if (window.confirm('Cancel this meetup? It disappears for everyone.')) {
-              meetups.cancelMeetup(id)
-            }
-          }}
-        />
-      )}
       <div className="mapview-bar">
         <div className="filterscroll">
           <button
@@ -1447,6 +1471,11 @@ export default function MapView({
             onUseMyLocation={useMyLocationForSpot}
             onSubmit={submitSpot}
             onClose={closeSpotFlow}
+            allowLink
+            onSetPoint={(pt) => {
+              setDraftPoint(pt)
+              mapRef.current?.flyTo([pt.lat, pt.lng], 17, { duration: 0.6 })
+            }}
           />
         )}
 

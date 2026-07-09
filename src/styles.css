@@ -276,6 +276,52 @@ a { color: var(--kelp); }
 .stat dt { font-size: 12px; color: var(--paper-faint); margin: 0 0 8px; }
 .stat dd { margin: 0; font-size: clamp(22px, 3vw, 30px); font-weight: 500; color: var(--paper); }
 
+/* home base callout on the Guide — the convention center anchors the week */
+.hub-card {
+  max-width: var(--maxw);
+  margin: 40px auto 0;
+  padding: 20px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--ping) 16%, var(--chart)),
+    var(--chart) 62%
+  );
+  border: 1px solid color-mix(in srgb, var(--ping) 40%, var(--line-strong));
+  border-radius: var(--radius);
+}
+.hub-badge {
+  flex: none;
+  display: grid; place-items: center;
+  width: 54px; height: 54px;
+  border-radius: 15px;
+  background: var(--ping);
+  color: var(--abyss);
+  box-shadow: 0 0 20px color-mix(in srgb, var(--ping) 45%, transparent);
+}
+.hub-badge svg { width: 30px; height: 30px; }
+.hub-body { flex: 1 1 auto; min-width: 0; }
+.hub-eyebrow {
+  font-family: var(--mono);
+  font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ping);
+  margin: 0 0 4px;
+}
+.hub-name {
+  font-family: var(--display); font-weight: 700;
+  font-size: clamp(19px, 2.4vw, 24px); letter-spacing: -0.01em;
+  margin: 0 0 5px;
+}
+.hub-notes { font-size: 14px; color: var(--paper-dim); line-height: 1.45; margin: 0; }
+.hub-sched { font-size: 13px; color: var(--paper); margin: 6px 0 0; }
+.hub-map { flex: none; }
+@media (max-width: 640px) {
+  .hub-card { flex-wrap: wrap; }
+  .hub-map { width: 100%; justify-content: center; }
+}
+
 .hero-cards {
   max-width: var(--maxw);
   margin: 46px auto 0;
@@ -450,6 +496,32 @@ a { color: var(--kelp); }
 }
 .pin--landmark .pin-votes { transform: rotate(-45deg); }
 
+/* home base: the convention center — a big glyph badge with a steady pulse so
+   it reads as the anchor of the whole map, unmistakable among the venue dots */
+.pin--hub {
+  width: 40px; height: 40px;
+  border-radius: 13px;
+  background: var(--pin);
+  border: 2.5px solid var(--abyss);
+  color: #06232c;
+  display: grid; place-items: center;
+  box-shadow:
+    0 0 0 2px var(--pin),
+    0 0 16px 2px color-mix(in srgb, var(--pin) 70%, transparent),
+    0 4px 12px rgba(0, 0, 0, 0.55);
+  z-index: 500;
+}
+.pin--hub svg { width: 24px; height: 24px; }
+.pin--hub::after {
+  content: '';
+  position: absolute; inset: -3px;
+  border-radius: 16px;
+  border: 2px solid var(--pin);
+  opacity: 0.6;
+  animation: favring 2.6s ease-out infinite;
+}
+.pin--hub .pin-votes { top: -9px; right: -11px; }
+
 /* live dots */
 .live-wrap { background: none !important; border: none !important; }
 .live-dot {
@@ -494,6 +566,18 @@ a { color: var(--kelp); }
 @keyframes livepulse {
   0% { transform: scale(0.7); opacity: 0.85; }
   100% { transform: scale(2); opacity: 0; }
+}
+
+/* "Last seen" traces: no pulse, muted ring, and a small "x ago" sub-label. The
+   per-dot opacity (set inline, fading with age) dims the whole marker. */
+.live-dot--stale .live-ring { animation: none; opacity: 0.3; }
+.live-dot--stale .live-core { border-color: color-mix(in srgb, var(--abyss) 70%, transparent); }
+.live-seen {
+  display: block;
+  margin-top: 1px;
+  font-size: 9px;
+  color: var(--paper-faint);
+  letter-spacing: 0.02em;
 }
 
 /* leaflet dark overrides */
@@ -623,6 +707,17 @@ a { color: var(--kelp); }
 .share-roster li { display: flex; align-items: center; gap: 9px; font-size: 13px; }
 .roster-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; box-shadow: 0 0 6px currentColor; }
 .roster-you { color: var(--paper-faint); font-size: 11px; }
+.roster-head {
+  margin: 14px 0 0; padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--paper-faint);
+}
+/* The "Last seen" list sits right under its heading — no second divider. */
+.share-roster--recent { margin-top: 8px; padding-top: 0; border-top: none; }
+.share-roster--recent li { opacity: 0.72; }
+.share-roster--recent .roster-dot { box-shadow: none; }
+.roster-seen { margin-left: auto; color: var(--paper-faint); font-size: 11px; }
 
 /* ============================================================
    FOOD
@@ -851,6 +946,49 @@ select.einput { appearance: none; -webkit-appearance: none; cursor: pointer; }
 }
 .sched-add-item:hover { border-color: var(--coral); color: var(--paper); }
 
+/* Meetups woven into the itinerary — coral highlight marks them as special, with
+   the map banner's RSVP controls reused inline. */
+.legend-meetup {
+  background: color-mix(in srgb, var(--coral) 22%, transparent);
+  color: var(--paper);
+  padding: 0 6px; border-radius: 4px;
+  box-decoration-break: clone;
+}
+.sched-meetup {
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--coral) 32%, transparent);
+  border-left: 3px solid var(--coral);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--coral) 8%, var(--chart));
+}
+.sched-meetup-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sched-meetup-time { min-width: 0; color: var(--coral); font-weight: 700; }
+.sched-meetup-tag {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--coral);
+  border: 1px solid color-mix(in srgb, var(--coral) 40%, transparent);
+  padding: 1px 7px; border-radius: 999px;
+}
+.sched-meetup-yourein {
+  margin-left: auto;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--kelp);
+  border: 1px solid color-mix(in srgb, var(--kelp) 45%, transparent);
+  padding: 1px 7px; border-radius: 999px;
+}
+.sched-meetup-main {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+}
+.sched-meetup-by { font-size: 10.5px; color: var(--paper-faint); letter-spacing: 0.02em; flex: 0 0 auto; }
+.sched-meetup-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+}
+.sched-meetup-cancel { align-self: flex-start; margin-top: -2px; }
+
 /* ============================================================
    CHECK-IN control (rendered into spot popups)
    ============================================================ */
@@ -1031,6 +1169,25 @@ select.einput { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .addspot-opt { color: var(--paper-faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
 .addspot-actions { display: flex; gap: 10px; margin-top: 16px; }
 .addspot-actions .btn { flex: 1; justify-content: center; }
+
+/* Paste-a-location field (Google Maps link / coordinates) */
+.addspot-link { margin: 4px 0 12px; }
+.addspot-link .share-label { margin-bottom: 5px; }
+.addspot-locnote { font-size: 11.5px; line-height: 1.4; margin: 6px 0 0; color: var(--kelp); letter-spacing: 0.01em; }
+.addspot-locnote--bad { color: var(--paper-faint); }
+
+/* Modal variant: the add panel as a centered card (Food tab), not the map's
+   absolutely-positioned corner sheet. Sits inside a .nameprompt-backdrop. */
+.addspot--modal {
+  position: static;
+  left: auto; bottom: auto;
+  width: min(380px, 100%);
+  max-height: min(86vh, 620px);
+}
+.foodadd-modal { width: min(380px, 100%); animation: fadein 0.16s ease-out; }
+
+/* "Add a food spot" button in the Food header */
+.foodadd-btn { margin: 0 0 16px; }
 
 /* "added by" tag on a user-added food card */
 .foodcard--user { border-left-style: dashed; }

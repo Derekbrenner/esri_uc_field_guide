@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Checkin, Photo } from '../lib/social'
 import { useBingo, useSquads } from '../lib/useSocial'
-import { badgesFor, scoreFor, squadScore } from '../lib/points'
+import { badgesForDevices, scoreForDevices, squadScore } from '../lib/points'
 import { colorForId, type LiveState } from '../lib/useLiveLocations'
 import BingoCard from './BingoCard'
 
@@ -49,16 +49,32 @@ export default function ScoresView({
     ].sort((a, b) => b.at.localeCompare(a.at))
     for (const r of newest) if (r.name && !nameOf.has(r.device_id)) nameOf.set(r.device_id, r.name)
 
-    return [...devices]
-      .map((d) => ({
-        deviceId: d,
-        name: nameOf.get(d) || 'Someone',
-        color: colorForId(d),
-        points: scoreFor(checkins, photos, d),
-        badges: badgesFor(checkins, photos, d),
-      }))
+    // Group devices by normalized name so one person on several devices is a
+    // single row with pooled points/badges. Anonymous devices stay separate.
+    const groups = new Map<string, { name: string; devices: Set<string> }>()
+    for (const d of devices) {
+      const display = nameOf.get(d) || 'Someone'
+      const norm = display.trim().toLowerCase()
+      const key = norm && norm !== 'someone' ? `name:${norm}` : `id:${d}`
+      const g = groups.get(key)
+      if (g) g.devices.add(d)
+      else groups.set(key, { name: display, devices: new Set([d]) })
+    }
+
+    return [...groups.entries()]
+      .map(([key, g]) => {
+        const primaryId = [...g.devices].sort()[0]
+        return {
+          key,
+          name: g.name,
+          color: colorForId(primaryId),
+          isMe: g.devices.has(myId),
+          points: scoreForDevices(checkins, photos, g.devices),
+          badges: badgesForDevices(checkins, photos, g.devices),
+        }
+      })
       .sort((a, b) => b.points - a.points || a.name.localeCompare(b.name))
-  }, [checkins, photos])
+  }, [checkins, photos, myId])
 
   const mySquadId = squads.squadOf(myId)
 
@@ -120,14 +136,14 @@ export default function ScoresView({
             <ol className="board">
               {board.map((r, i) => (
                 <li
-                  key={r.deviceId}
-                  className={`board-row${r.deviceId === myId ? ' board-row--me' : ''}`}
+                  key={r.key}
+                  className={`board-row${r.isMe ? ' board-row--me' : ''}`}
                 >
                   <span className="board-rank mono">{i + 1}</span>
                   <span className="board-dot" style={{ background: r.color }} aria-hidden />
                   <span className="board-name">
                     {r.name}
-                    {r.deviceId === myId && <span className="board-you mono">you</span>}
+                    {r.isMe && <span className="board-you mono">you</span>}
                   </span>
                   {r.badges.length > 0 && (
                     <span className="board-badges">

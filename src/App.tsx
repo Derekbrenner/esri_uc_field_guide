@@ -80,25 +80,28 @@ export default function App() {
     window.scrollTo({ top: 0 })
   }
 
-  // Jump to the map and fly to a location (used by the Pictures lightbox).
-  const showOnMap = (lat: number, lng: number) => {
-    setMapFocus({ lat, lng, at: Date.now() })
+  // Jump to the map and fly to a location. `spotKey`, when known, lets the map
+  // open that exact marker's popup (used by "Show on map" from spot lists); the
+  // Pictures lightbox passes bare coordinates.
+  const showOnMap = (lat: number, lng: number, spotKey?: string) => {
+    setMapFocus({ lat, lng, at: Date.now(), spotKey })
     go('Map')
   }
 
-  // Resolve a schedule item's linked spot_key ('venue:<slug>' or a user-spot
-  // uuid) to coordinates, then fly the map there. Used by the Schedule tab.
+  // Resolve a spot's linked spot_key ('venue:<slug>' or a user-spot uuid) to
+  // coordinates, then fly the map there with its popup open. Used by the Guide,
+  // Food, and Schedule tabs.
   const showSpotOnMap = (spotKey: string) => {
     if (spotKey.startsWith('venue:')) {
       const v = venues.find((vv) => venueKey(vv) === spotKey)
-      if (v) showOnMap(v.lat, v.lng)
+      if (v) showOnMap(v.lat, v.lng, spotKey)
       return
     }
     const s = spots.spots.find((sp) => sp.id === spotKey)
-    if (s && s.lat != null && s.lng != null) showOnMap(s.lat, s.lng)
+    if (s && s.lat != null && s.lng != null) showOnMap(s.lat, s.lng, spotKey)
   }
 
-  const liveCount = live.others.length + (live.me ? 1 : 0)
+  const liveCount = live.liveCount
   const showBadge = live.configured && liveCount > 0
 
   return (
@@ -130,7 +133,7 @@ export default function App() {
       </header>
 
       <main id="main" className="main">
-        {tab === 'Guide' && <Hero onNav={go} live={live} />}
+        {tab === 'Guide' && <Hero onNav={go} live={live} onShowSpot={showSpotOnMap} />}
         {tab === 'Map' && (
           <MapView
             live={live}
@@ -145,10 +148,17 @@ export default function App() {
             onOpenSquads={() => setSquadsOpen(true)}
           />
         )}
-        {tab === 'Food & Drink' && <FoodView onNav={go} live={live} votes={votes} spots={spots} />}
+        {tab === 'Food & Drink' && (
+          <FoodView live={live} votes={votes} spots={spots} onShowSpot={showSpotOnMap} />
+        )}
         {tab === 'Pictures' && <PicturesView photos={photos} live={live} onShowOnMap={showOnMap} />}
         {tab === 'Schedule' && (
-          <ScheduleView live={live} onShowSpot={showSpotOnMap} userSpots={spots.spots} />
+          <ScheduleView
+            live={live}
+            meetups={meetups}
+            onShowSpot={showSpotOnMap}
+            userSpots={spots.spots}
+          />
         )}
         {tab === 'Crew' && <CrewView live={live} />}
         {tab === 'Scores' && (

@@ -40,22 +40,33 @@ function firstDeviceBySpot(checkins: Checkin[]): Map<string, string> {
 
 // Total points for one person. `checkins` / `photos` are the full crew-wide
 // lists — the crew-first bonus needs everyone's data to know who was first.
-export function scoreFor(checkins: Checkin[], photos: Photo[], deviceId: string): number {
+// `devices` is the set of device ids belonging to this person (one, or several
+// when they share a name across devices — see scoreFor for the single case).
+export function scoreForDevices(
+  checkins: Checkin[],
+  photos: Photo[],
+  devices: Set<string>,
+): number {
   let score = 0
   const first = firstDeviceBySpot(checkins)
   const firstSpots = new Set<string>()
 
   for (const c of checkins) {
-    if (c.device_id !== deviceId) continue
+    if (!devices.has(c.device_id)) continue
     score += c.verified ? POINTS.verifiedCheckin : POINTS.unverifiedCheckin
-    if (first.get(c.spot_key) === deviceId) firstSpots.add(c.spot_key)
+    // Crew-first at this spot counts if ANY of the person's devices was first.
+    if (devices.has(first.get(c.spot_key) ?? '')) firstSpots.add(c.spot_key)
   }
   score += firstSpots.size * POINTS.firstOfCrew
 
   for (const p of photos) {
-    if (p.device_id === deviceId) score += POINTS.perPhoto
+    if (devices.has(p.device_id)) score += POINTS.perPhoto
   }
   return score
+}
+
+export function scoreFor(checkins: Checkin[], photos: Photo[], deviceId: string): number {
+  return scoreForDevices(checkins, photos, new Set([deviceId]))
 }
 
 // --- Badges ----------------------------------------------------------------
@@ -71,22 +82,26 @@ export const BADGES: Record<string, Badge> = {
   shutterbug: { id: 'shutterbug', label: 'Shutterbug', emoji: '📸' },
 }
 
-// Badges earned by one person, given the full crew-wide check-in + photo lists.
-// (Rules per Phase 3; refine freely as the game evolves.)
-export function badgesFor(checkins: Checkin[], photos: Photo[], deviceId: string): Badge[] {
+// Badges earned by one person (possibly spanning several devices), given the
+// full crew-wide check-in + photo lists. (Rules per Phase 3.)
+export function badgesForDevices(
+  checkins: Checkin[],
+  photos: Photo[],
+  devices: Set<string>,
+): Badge[] {
   const earned: Badge[] = []
-  const mine = checkins.filter((c) => c.device_id === deviceId)
-  const myPhotos = photos.filter((p) => p.device_id === deviceId)
+  const mine = checkins.filter((c) => devices.has(c.device_id))
+  const myPhotos = photos.filter((p) => devices.has(p.device_id))
 
   // Crew-wide first check-in ever.
   const firstEver = [...checkins].sort((a, b) => a.created_at.localeCompare(b.created_at))[0]
-  if (firstEver && firstEver.device_id === deviceId) earned.push(BADGES.firstCheckin)
+  if (firstEver && devices.has(firstEver.device_id)) earned.push(BADGES.firstCheckin)
 
   // First at any spot.
   const first = firstDeviceBySpot(checkins)
-  if ([...first.values()].includes(deviceId)) earned.push(BADGES.trailblazer)
+  if ([...first.values()].some((d) => devices.has(d))) earned.push(BADGES.trailblazer)
 
-  // Five distinct spots.
+  // Five distinct spots (across the person's devices).
   if (new Set(mine.map((c) => c.spot_key)).size >= 5) earned.push(BADGES.fiveSpots)
 
   // Night owl: any check-in between 00:00 and 05:00 local time.
@@ -98,6 +113,10 @@ export function badgesFor(checkins: Checkin[], photos: Photo[], deviceId: string
   if (myPhotos.length >= 5) earned.push(BADGES.shutterbug)
 
   return earned
+}
+
+export function badgesFor(checkins: Checkin[], photos: Photo[], deviceId: string): Badge[] {
+  return badgesForDevices(checkins, photos, new Set([deviceId]))
 }
 
 // --- Squads (Phase 6) -------------------------------------------------------
@@ -180,4 +199,48 @@ export function squadScore(
     }
   }
   return score
+}
+
+// ---------------------------------------------------------------------------
+// Reading a location out of what the crew can actually paste: a Google Maps
+// link or bare "lat, lng" coordinates. Stays client-side (no geocoding key) —
+// it reads coordinates already present in the text, it does not resolve names.
+// ---------------------------------------------------------------------------
+
+// True for the shortened share links (maps.app.goo.gl, goo.gl/maps, Apple Maps)
+// that DON'T embed coordinates — they only resolve via a redirect the browser
+// can't follow cross-origin, so we can't read a location from them. Used to
+// show a helpful nudge instead of a blank "couldn't read that".
+export function isShortMapLink(raw: string): boolean {
+  return /(?:maps\.app\.goo\.gl|goo\.gl\/maps|g\.co\/kgs|maps\.apple\.com)/i.test(raw)
+}
+
+function validLatLng(lat: number, lng: number): boolean {
+  return Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180
+}
+
+// Pull a lat/lng out of pasted text: a bare "32.71, -117.16", or a full Google
+// Maps URL — the "…/@lat,lng,zoom…" the browser address bar shows, the
+// "!3dlat!4dlng" place marker baked into a place URL, or a "?q=lat,lng" /
+// "?ll=lat,lng" query. Returns null when nothing coordinate-shaped is present
+// (e.g. a short share link, or a name-only query).
+export function parseLatLng(raw: string): LatLng | null {
+  const s = (raw || '').trim()
+  if (!s) return null
+  const num = String.raw`(-?\d{1,3}(?:\.\d+)?)`
+
+  const hit =
+    // Bare "lat, lng" (comma- or space-separated) pasted on its own.
+    s.match(new RegExp(`^${num}\\s*[,\\s]\\s*${num}$`)) ||
+    // "!3dlat!4dlng" — the place pin inside a full Maps URL (most precise).
+    s.match(new RegExp(`!3d${num}!4d${num}`)) ||
+    // "@lat,lng" — the map viewport centre in a "…/place/…/@…" URL.
+    s.match(new RegExp(`@${num},${num}`)) ||
+    // "?q=/query=/ll=/sll=/destination=/center=lat,lng" query parameters.
+    s.match(new RegExp(`[?&](?:q|query|ll|sll|daddr|destination|center)=${num},${num}`, 'i'))
+
+  if (!hit) return null
+  const lat = parseFloat(hit[1])
+  const lng = parseFloat(hit[2])
+  return validLatLng(lat, lng) ? { lat, lng } : null
 }

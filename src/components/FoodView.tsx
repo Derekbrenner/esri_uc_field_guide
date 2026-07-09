@@ -1,13 +1,14 @@
 import { useState } from 'react'
-import type { Tab } from '../App'
-import { categoryColor, categoryOrder, venueKey, venues, type VenueCategory } from '../data/venues'
+import { categoryColor, foodCategories, venueKey, venues, type VenueCategory } from '../data/venues'
 import type { LiveState } from '../lib/useLiveLocations'
-import { useVoteGate, type VotesApi } from '../lib/useSocial'
+import { useNameGate, useVoteGate, type VotesApi } from '../lib/useSocial'
 import type { Spot } from '../lib/social'
+import type { LatLng } from '../lib/points'
 import VoteButton from './VoteButton'
 import NamePrompt from './NamePrompt'
+import AddSpotPanel, { type SpotFields } from './AddSpotPanel'
 
-const FOOD_CATS = categoryOrder.filter((c) => c !== 'Landmark')
+const FOOD_CATS = foodCategories
 
 // A curated venue or a user-added spot, flattened into one card model.
 type FoodItem = {
@@ -23,20 +24,84 @@ type FoodItem = {
 }
 
 export default function FoodView({
-  onNav,
   live,
   votes,
   spots,
+  onShowSpot,
 }: {
-  onNav: (t: Tab) => void
   live: LiveState
   votes: VotesApi
-  // Only the rows are read here; typed loosely so App can pass the full hook.
-  spots: { spots: Spot[] }
+  // Rows are read for the list; addSpot/configured drive the "add a food spot"
+  // flow. Typed to just what's used so App can pass the full useSpots() hook.
+  spots: {
+    spots: Spot[]
+    addSpot: (input: {
+      name: string
+      category?: string | null
+      lat: number
+      lng: number
+      note?: string | null
+      added_by_name: string
+      added_by_device: string
+    }) => Promise<{ data: Spot | null; error: string | null }>
+    configured: boolean
+  }
+  // Fly the map to a spot (by spot_key) with its popup already open.
+  onShowSpot: (spotKey: string) => void
 }) {
   const [filter, setFilter] = useState<VenueCategory | 'All'>('All')
   const cats = filter === 'All' ? FOOD_CATS : [filter]
   const gate = useVoteGate(votes, live)
+
+  // "Add a food spot" flow: a modal sheet with the location captured from a
+  // pasted Google Maps link / coordinates (or "use my location") — no map to
+  // tap on this tab. Name-gated on submit like the map's add flow.
+  const [adding, setAdding] = useState(false)
+  const [point, setPoint] = useState<LatLng | null>(null)
+  const [locating, setLocating] = useState(false)
+  const spotGate = useNameGate(live)
+
+  const closeAdd = () => {
+    setAdding(false)
+    setPoint(null)
+    setLocating(false)
+  }
+
+  const useMyLocation = () => {
+    if (live.me) {
+      setPoint({ lat: live.me.lat, lng: live.me.lng })
+      return
+    }
+    if (!('geolocation' in navigator)) return
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        setLocating(false)
+        setPoint({ lat: p.coords.latitude, lng: p.coords.longitude })
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, maximumAge: 10_000, timeout: 15_000 },
+    )
+  }
+
+  const submitFoodSpot = (fields: SpotFields) => {
+    const pt = point
+    if (!pt) return
+    // Attribute to the shared identity — prompt for a name first if unset.
+    spotGate.request(() => {
+      const name = (live.name || localStorage.getItem('sdfg.name') || 'Someone').trim() || 'Someone'
+      spots.addSpot({
+        name: fields.name,
+        category: fields.category,
+        lat: pt.lat,
+        lng: pt.lng,
+        note: fields.note || null,
+        added_by_name: name,
+        added_by_device: live.myId,
+      })
+      closeAdd()
+    })
+  }
 
   // Curated venues + user-added spots whose category is a food/drink one.
   const venueItems: FoodItem[] = venues.map((v) => ({
@@ -71,6 +136,11 @@ export default function FoodView({
           Everything the crew scouted for the week, sorted by type. Tap “Show on map” to see it in
           context with everyone’s live location.
         </p>
+        {spots.configured && (
+          <button className="btn btn--primary btn--sm foodadd-btn" onClick={() => setAdding(true)}>
+            <span className="chip-plus" aria-hidden>＋</span> Add a food spot
+          </button>
+        )}
         <div className="filterscroll filterscroll--flush">
           <button className={`chip${filter === 'All' ? ' chip--on' : ''}`} onClick={() => setFilter('All')}>
             All
@@ -133,7 +203,7 @@ export default function FoodView({
                         ))}
                       </span>
                     )}
-                    <button className="foodcard-map" onClick={() => onNav('Map')}>
+                    <button className="foodcard-map" onClick={() => onShowSpot(item.key)}>
                       Show on map →
                     </button>
                   </div>
@@ -144,7 +214,36 @@ export default function FoodView({
         )
       })}
 
+      {adding && (
+        <div className="nameprompt-backdrop" onClick={closeAdd}>
+          <div className="foodadd-modal" onClick={(e) => e.stopPropagation()}>
+            <AddSpotPanel
+              mode="add"
+              variant="modal"
+              heading="Add a food spot"
+              initial={null}
+              categories={FOOD_CATS}
+              allowLink
+              point={point}
+              locating={locating}
+              onUseMyLocation={useMyLocation}
+              onSetPoint={setPoint}
+              onSubmit={submitFoodSpot}
+              onClose={closeAdd}
+            />
+          </div>
+        </div>
+      )}
+
       <NamePrompt open={gate.promptOpen} onSave={gate.resolve} onCancel={gate.cancel} />
+      <NamePrompt
+        open={spotGate.promptOpen}
+        onSave={spotGate.resolve}
+        onCancel={spotGate.cancel}
+        title="Who’s adding this spot?"
+        lede="Pick your name so the crew knows who put this on the map. Saved on this device only."
+        cta="Save & add spot"
+      />
     </section>
   )
 }

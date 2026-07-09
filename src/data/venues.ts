@@ -16,6 +16,7 @@ export type Venue = {
   schedule?: string // group plan attached to this spot in the doc
   tags?: VenueCategory[] // other categories this spot also appears under
   landmark?: boolean
+  hub?: boolean // home base — the convention center; gets a standout pin + Guide section
   lat: number
   lng: number
   url?: string
@@ -45,7 +46,7 @@ export function venueKey(v: { slug: string }): string {
 // A few may be a block off — every one is easy to nudge: just edit lat/lng here.
 const rawVenues: Omit<Venue, 'slug'>[] = [
   // --- Landmarks / key schedule spots ---
-  { name: 'San Diego Convention Center', category: 'Landmark', landmark: true, notes: 'Home base — plenary, sessions, exhibit hall.', lat: 32.7065, lng: -117.161 },
+  { name: 'San Diego Convention Center', category: 'Landmark', landmark: true, hub: true, notes: 'Home base — plenary, sessions, exhibit hall.', schedule: 'Plenary Mon 7/13 · 8:30 AM', lat: 32.7065, lng: -117.161 },
   { name: 'Marriott Marquis', category: 'Landmark', landmark: true, notes: 'Badge pickup + Central Coast Meetup (Pacific Ballroom Salon 14).', lat: 32.7062, lng: -117.1622 },
   { name: 'Petco Park', category: 'Landmark', landmark: true, notes: 'Ballpark next to the convention center.', lat: 32.7073, lng: -117.1566 },
   { name: 'Balboa Park', category: 'Landmark', landmark: true, notes: 'Balboa Park Party, Thu 7/16 · 5:30–9:00.', lat: 32.7341, lng: -117.1447 },
@@ -103,6 +104,10 @@ const rawVenues: Omit<Venue, 'slug'>[] = [
 // Each venue gets a stable slug derived from its name (see slugify above).
 export const venues: Venue[] = rawVenues.map((v) => ({ ...v, slug: slugify(v.name) }))
 
+// Home base: the convention center. Everything on the trip orbits it, so it gets
+// a standout pin on the map and its own section on the Guide.
+export const hubVenue: Venue | undefined = venues.find((v) => v.hub)
+
 export const categoryOrder: VenueCategory[] = [
   'Landmark',
   'Lunch',
@@ -112,6 +117,11 @@ export const categoryOrder: VenueCategory[] = [
   'Rooftops',
   'Sweets',
 ]
+
+// The food/drink categories — the curated set minus Landmark. A user-added food
+// spot must fall in one of these (no free-form, no POI), so the Food list and
+// the "add a food spot" picker share this one source of truth.
+export const foodCategories: VenueCategory[] = categoryOrder.filter((c) => c !== 'Landmark')
 
 export const categoryColor: Record<VenueCategory, string> = {
   Landmark: '#38E1FF',

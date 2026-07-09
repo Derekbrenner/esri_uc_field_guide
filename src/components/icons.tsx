@@ -71,6 +71,19 @@ export function TrophyIcon({ className }: P) {
   )
 }
 
+// Convention center / home base — a broad convention hall with a peaked roof
+// and a row of columns. Reads as the one civic building on the map.
+export function ConventionIcon({ className }: P) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M3 9.5 12 4l9 5.5" />
+      <path d="M4.5 9.5v9M19.5 9.5v9" />
+      <path d="M8 11v6M12 11v6M16 11v6" />
+      <path d="M3 20.5h18" />
+    </svg>
+  )
+}
+
 export function CameraIcon({ className }: P) {
   return (
     <svg {...base} className={className}>

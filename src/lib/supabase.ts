@@ -40,11 +40,27 @@ export type LiveLocation = {
   updated_at: string
 }
 
-// Anything older than this is treated as stale and hidden from the map.
-export const STALE_AFTER_MS = 15 * 60 * 1000
+// Two tiers of presence:
+//  • LIVE  — updated within LIVE_AFTER_MS → bright, pulsing "here now" dot.
+//  • SEEN  — older than LIVE but within SEEN_AFTER_MS → a faded "last seen X ago"
+//            dot. Rows past SEEN_AFTER_MS are dropped from the fetch entirely.
+export const LIVE_AFTER_MS = 2 * 60 * 1000 // 2 min (heartbeat is every 15s)
+export const SEEN_AFTER_MS = 24 * 60 * 60 * 1000 // 1 day
+
+// Kept for backwards-compat; equals the live threshold.
+export const STALE_AFTER_MS = LIVE_AFTER_MS
+
+export function isLive(loc: Pick<LiveLocation, 'updated_at'>, now: number): boolean {
+  return now - new Date(loc.updated_at).getTime() < LIVE_AFTER_MS
+}
+
+// Within the "last seen" retention window (includes live rows).
+export function isSeen(loc: Pick<LiveLocation, 'updated_at'>, now: number): boolean {
+  return now - new Date(loc.updated_at).getTime() < SEEN_AFTER_MS
+}
 
 export function isFresh(loc: Pick<LiveLocation, 'updated_at'>, now: number): boolean {
-  return now - new Date(loc.updated_at).getTime() < STALE_AFTER_MS
+  return isLive(loc, now)
 }
 
 export async function upsertLocation(
@@ -59,7 +75,7 @@ export async function upsertLocation(
 
 export async function fetchLocations(): Promise<LiveLocation[]> {
   if (!client) return []
-  const since = new Date(Date.now() - STALE_AFTER_MS).toISOString()
+  const since = new Date(Date.now() - SEEN_AFTER_MS).toISOString()
   const { data, error } = await client
     .from('attendee_locations')
     .select('*')

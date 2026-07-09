@@ -23,7 +23,9 @@ export default function SharePanel({ live, onRecenter }: { live: LiveState; onRe
     return attendeeNames
   }, [attendeesLive, attendees])
 
-  const liveCount = live.others.length + (live.me ? 1 : 0)
+  const liveCount = live.liveCount
+  const livePeople = live.people.filter((p) => p.live)
+  const recentPeople = live.people.filter((p) => !p.live)
 
   return (
     <div className={`share${open ? '' : ' share--collapsed'}`}>
@@ -72,8 +74,9 @@ export default function SharePanel({ live, onRecenter }: { live: LiveState; onRe
                 <span className="share-go-dot" /> Start sharing
               </button>
               <p className="share-fine">
-                Your location is stored only while you’re sharing and disappears 15 minutes after you
-                stop. Nothing is saved to your device beyond your name.
+                While you share, your dot updates live. Hit <strong>Stop sharing</strong> to vanish
+                right away. If you just close the app, your last spot lingers — faded, labeled “last
+                seen” — for up to a day. Only your name is saved on this device.
               </p>
             </>
           ) : (
@@ -91,21 +94,32 @@ export default function SharePanel({ live, onRecenter }: { live: LiveState; onRe
 
           {live.error && <p className="share-error">{live.error}</p>}
 
-          {liveCount > 0 && (
+          {livePeople.length > 0 && (
             <ul className="share-roster">
-              {live.me && (
-                <li>
-                  <span className="roster-dot" style={{ background: live.me.color }} />
-                  {live.me.name} <span className="mono roster-you">you</span>
-                </li>
-              )}
-              {live.others.map((o) => (
-                <li key={o.id}>
-                  <span className="roster-dot" style={{ background: o.color }} />
-                  {o.name}
+              {livePeople.map((p) => (
+                <li key={p.key}>
+                  <span className="roster-dot" style={{ background: p.color }} />
+                  {p.name}
+                  {p.isMe && <span className="mono roster-you">you</span>}
                 </li>
               ))}
             </ul>
+          )}
+
+          {recentPeople.length > 0 && (
+            <>
+              <p className="roster-head">Last seen</p>
+              <ul className="share-roster share-roster--recent">
+                {recentPeople.map((p) => (
+                  <li key={p.key}>
+                    <span className="roster-dot" style={{ background: p.color }} />
+                    {p.name}
+                    {p.isMe && <span className="mono roster-you">you</span>}
+                    <span className="roster-seen mono">{p.seenLabel}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </div>
       )}

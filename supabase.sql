@@ -23,11 +23,13 @@ create table if not exists public.attendee_locations (
 );
 
 -- Optional tidy-up: a helper to purge stale rows. Call it from a scheduled
--- job, or just ignore it — the app already hides anything older than 15 min.
+-- job, or just ignore it — the app hides live dots after ~2 min and drops
+-- "last seen" traces after 1 day on its own. The 25-hour cutoff here stays
+-- just past that window so scheduling this never erases a still-shown trace.
 create or replace function public.purge_stale_locations() returns void
 language sql as $$
   delete from public.attendee_locations
-  where updated_at < now() - interval '30 minutes';
+  where updated_at < now() - interval '25 hours';
 $$;
 
 -- ---------------------------------------------------------------------------

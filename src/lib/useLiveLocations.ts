@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   fetchLocations,
   isSupabaseConfigured,
-  isFresh,
+  isLive,
+  SEEN_AFTER_MS,
   stopSharing as remoteStop,
   subscribeLocations,
   upsertLocation,
@@ -42,14 +43,84 @@ function getDeviceId(): string {
   return id
 }
 
+// One person on the map, after merging any devices that share a name. A live
+// person is actively pushing fixes; a non-live one is a "last seen X ago" trace.
+export type Presence = {
+  key: string // merge key (normalized name, or device id when anonymous)
+  name: string
+  color: string
+  lat: number
+  lng: number
+  updatedAt: string // newest fix across this person's devices
+  live: boolean // within LIVE_AFTER_MS → bright, pulsing dot
+  isMe: boolean // one of this person's devices is mine
+  seenLabel: string // "" when live, else "5m ago" / "2h ago" / "1d ago"
+  opacity: number // 1 when live, fading toward ~0.35 as the trace ages
+}
+
+// Human "last seen" label. Coarse on purpose so the map/roster only re-render
+// when the wording actually changes.
+export function formatSeen(iso: string, now: number = Date.now()): string {
+  const ms = Math.max(0, now - new Date(iso).getTime())
+  const min = Math.floor(ms / 60_000)
+  if (min < 1) return 'just now'
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  return `${Math.floor(hr / 24)}d ago`
+}
+
+// Collapse raw rows into one Presence per person. Devices that share a
+// (case-insensitive) real name merge into a single dot at their most-recent
+// position; anonymous rows ("Someone" / blank) stay separate, keyed by device.
+export function mergePeople(rows: LiveLocation[], now: number, myId: string): Presence[] {
+  const groups = new Map<string, LiveLocation[]>()
+  for (const r of rows) {
+    const nm = (r.name || '').trim().toLowerCase()
+    const key = nm && nm !== 'someone' ? `name:${nm}` : `id:${r.id}`
+    const arr = groups.get(key)
+    if (arr) arr.push(r)
+    else groups.set(key, [r])
+  }
+
+  const people: Presence[] = []
+  for (const [key, arr] of groups) {
+    // Representative fix = the newest across the person's devices.
+    const newest = arr.reduce((a, b) => (a.updated_at >= b.updated_at ? a : b))
+    // Stable per-person color: derive from the lowest device id so it doesn't
+    // flip as different devices take turns pushing.
+    const primaryId = arr.map((r) => r.id).sort()[0]
+    const live = isLive(newest, now)
+    const ageMs = now - new Date(newest.updated_at).getTime()
+    people.push({
+      key,
+      name: newest.name || 'Someone',
+      color: colorForId(primaryId),
+      lat: newest.lat,
+      lng: newest.lng,
+      updatedAt: newest.updated_at,
+      live,
+      isMe: arr.some((r) => r.id === myId),
+      seenLabel: live ? '' : formatSeen(newest.updated_at, now),
+      opacity: live ? 1 : Math.max(0.35, 0.8 - 0.45 * (ageMs / SEEN_AFTER_MS)),
+    })
+  }
+
+  // Live first, then most-recently seen.
+  return people.sort(
+    (a, b) => Number(b.live) - Number(a.live) || b.updatedAt.localeCompare(a.updatedAt),
+  )
+}
+
 export type LiveState = {
   configured: boolean
   sharing: boolean
   name: string
   myId: string
   myColor: string
-  others: LiveLocation[] // everyone except me, fresh only
-  me: LiveLocation | null
+  people: Presence[] // everyone within the last-seen window, merged by name
+  liveCount: number // how many of `people` are live right now
+  me: LiveLocation | null // my own device's live fix (null unless live)
   error: string | null
   start: (name: string) => void
   stop: () => void
@@ -184,9 +255,13 @@ export function useLiveLocations(): LiveState {
   }, [])
 
   const now = Date.now()
-  const fresh = all.filter((l) => isFresh(l, now))
-  const me = fresh.find((l) => l.id === myId) ?? null
-  const others = fresh.filter((l) => l.id !== myId)
+  const people = mergePeople(all, now, myId)
+  const liveCount = people.filter((p) => p.live).length
+  // My own device's live fix — used for "center on me" / "use my location".
+  // Null unless it's actually live, so those actions fall back to a fresh GPS
+  // read rather than flying to a stale spot.
+  const myRow = all.find((l) => l.id === myId) ?? null
+  const me = myRow && isLive(myRow, now) ? myRow : null
 
   return {
     configured: isSupabaseConfigured,
@@ -194,7 +269,8 @@ export function useLiveLocations(): LiveState {
     name,
     myId,
     myColor,
-    others,
+    people,
+    liveCount,
     me,
     error,
     start,
