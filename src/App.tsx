@@ -2,15 +2,16 @@ import { useEffect, useMemo, useState, type ComponentType } from 'react'
 import { useLiveLocations } from './lib/useLiveLocations'
 import { useCheckins, usePhotos, useVotes } from './lib/useSocial'
 import Hero from './components/Hero'
-import MapView from './components/MapView'
+import MapView, { type MapFocus } from './components/MapView'
 import FoodView from './components/FoodView'
+import PicturesView from './components/PicturesView'
 import ScheduleView from './components/ScheduleView'
 import CrewView from './components/CrewView'
 import ScoresView from './components/ScoresView'
 import Toasts from './components/Toasts'
-import { CalendarIcon, CompassIcon, CrewIcon, CupIcon, PinIcon, TrophyIcon } from './components/icons'
+import { CalendarIcon, CameraIcon, CompassIcon, CrewIcon, CupIcon, PinIcon, TrophyIcon } from './components/icons'
 
-const TABS = ['Guide', 'Map', 'Food & Drink', 'Schedule', 'Crew', 'Scores'] as const
+const TABS = ['Guide', 'Map', 'Food & Drink', 'Pictures', 'Schedule', 'Crew', 'Scores'] as const
 export type Tab = (typeof TABS)[number]
 
 // Short labels + icons for the mobile bottom bar.
@@ -18,24 +19,31 @@ const TAB_META: Record<Tab, { short: string; Icon: ComponentType<{ className?: s
   Guide: { short: 'Guide', Icon: CompassIcon },
   Map: { short: 'Map', Icon: PinIcon },
   'Food & Drink': { short: 'Food', Icon: CupIcon },
+  Pictures: { short: 'Pics', Icon: CameraIcon },
   Schedule: { short: 'Plan', Icon: CalendarIcon },
   Crew: { short: 'Crew', Icon: CrewIcon },
   Scores: { short: 'Scores', Icon: TrophyIcon },
 }
 
+// Social-only tabs: hidden entirely when Supabase isn't configured.
+const SOCIAL_TABS: Tab[] = ['Pictures', 'Scores']
+
 export default function App() {
   const [tab, setTab] = useState<Tab>('Guide')
+  // Where the map should fly when arriving via a "Show on map" jump.
+  const [mapFocus, setMapFocus] = useState<MapFocus | null>(null)
   const live = useLiveLocations()
   // Shared across the map + food views so the subscription persists across tabs.
   const votes = useVotes()
-  // Shared check-in + photo streams: the map (presence + check-in), the Scores
-  // leaderboard, and the toast feed all read from one realtime subscription.
+  // Shared check-in + photo streams: the map (presence + check-in + photos), the
+  // Pictures grid, the Scores leaderboard, and the toast feed all read from one
+  // realtime subscription each.
   const checkins = useCheckins()
   const photos = usePhotos()
 
-  // Scores is a social feature — hidden entirely when Supabase isn't configured.
+  // Pictures + Scores are social features — hidden when Supabase isn't configured.
   const tabs = useMemo<Tab[]>(
-    () => (live.configured ? [...TABS] : TABS.filter((t) => t !== 'Scores')),
+    () => (live.configured ? [...TABS] : TABS.filter((t) => !SOCIAL_TABS.includes(t))),
     [live.configured],
   )
 
@@ -54,6 +62,12 @@ export default function App() {
     setTab(t)
     history.replaceState(null, '', `#${encodeURIComponent(t)}`)
     window.scrollTo({ top: 0 })
+  }
+
+  // Jump to the map and fly to a location (used by the Pictures lightbox).
+  const showOnMap = (lat: number, lng: number) => {
+    setMapFocus({ lat, lng, at: Date.now() })
+    go('Map')
   }
 
   const liveCount = live.others.length + (live.me ? 1 : 0)
@@ -89,8 +103,18 @@ export default function App() {
 
       <main id="main" className="main">
         {tab === 'Guide' && <Hero onNav={go} live={live} />}
-        {tab === 'Map' && <MapView live={live} votes={votes} checkins={checkins} />}
+        {tab === 'Map' && (
+          <MapView
+            live={live}
+            votes={votes}
+            checkins={checkins}
+            photos={photos}
+            focus={mapFocus}
+            onFocusConsumed={() => setMapFocus(null)}
+          />
+        )}
         {tab === 'Food & Drink' && <FoodView onNav={go} live={live} votes={votes} />}
+        {tab === 'Pictures' && <PicturesView photos={photos} live={live} onShowOnMap={showOnMap} />}
         {tab === 'Schedule' && <ScheduleView />}
         {tab === 'Crew' && <CrewView />}
         {tab === 'Scores' && <ScoresView checkins={checkins.checkins} photos={photos.photos} myId={live.myId} />}

@@ -70,3 +70,12 @@ export function TrophyIcon({ className }: P) {
     </svg>
   )
 }
+
+export function CameraIcon({ className }: P) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M4 7.5h3l1.4-2.2h7.2L17 7.5h3a1 1 0 0 1 1 1V18a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8.5a1 1 0 0 1 1-1Z" />
+      <circle cx="12" cy="13" r="3.2" />
+    </svg>
+  )
+}

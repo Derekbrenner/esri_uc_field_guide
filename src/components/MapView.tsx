@@ -3,13 +3,19 @@ import { createPortal } from 'react-dom'
 import L from 'leaflet'
 import { categoryColor, categoryOrder, venueKey, venues, type Venue, type VenueCategory } from '../data/venues'
 import { colorForId, type LiveState } from '../lib/useLiveLocations'
-import { useCheckins, useNameGate, useSquads, useVoteGate, type VotesApi } from '../lib/useSocial'
-import type { Checkin } from '../lib/social'
+import { useCheckins, useNameGate, usePhotos, useSquads, useVoteGate, type VotesApi } from '../lib/useSocial'
+import { photoUrl, type Checkin, type Photo } from '../lib/social'
 import CheckInButton from './CheckInButton'
+import PhotoUpload from './PhotoUpload'
 import SharePanel from './SharePanel'
 import NamePrompt from './NamePrompt'
 
 type CheckinsApi = ReturnType<typeof useCheckins>
+type PhotosApi = ReturnType<typeof usePhotos>
+
+// Where "Show on map" flies to. `at` is a nonce so re-picking the same spot
+// re-fires the effect.
+export type MapFocus = { lat: number; lng: number; at: number }
 
 const CENTER: [number, number] = [32.7108, -117.1605]
 
@@ -20,19 +26,103 @@ const VOTE_CAP = 8
 // Presence: only surface people whose open check-in is fresher than this.
 const PRESENCE_MAX_AGE_MS = 4 * 60 * 60 * 1000
 
-function venueIcon(category: VenueCategory, landmark: boolean, voteCount: number): L.DivIcon {
+// Strip characters that could break out of a CSS url('…') context. Supabase
+// public URLs never contain these, but keep the DivIcon HTML safe regardless.
+function cssUrl(url: string): string {
+  return url.replace(/[\\'")]/g, '')
+}
+
+function venueIcon(
+  category: VenueCategory,
+  landmark: boolean,
+  voteCount: number,
+  thumbUrl?: string,
+): L.DivIcon {
   const color = categoryColor[category]
   const capped = Math.min(voteCount, VOTE_CAP)
   const size = 16 + capped * 1.6 // 16 → ~29px
   const box = size + 10 // padding for the glow ring + count badge
   const badge = voteCount > 0 ? `<b class="pin-votes mono">${voteCount > 99 ? '99+' : voteCount}</b>` : ''
+  const photo = thumbUrl ? `<i class="pin-photo" style="background-image:url('${cssUrl(thumbUrl)}')"></i>` : ''
   return L.divIcon({
     className: 'pin-wrap',
-    html: `<span class="pin${landmark ? ' pin--landmark' : ''}${voteCount > 0 ? ' pin--voted' : ''}" style="--pin:${color};--pinv:${capped};--pinsz:${size}px">${badge}</span>`,
+    html: `<span class="pin${landmark ? ' pin--landmark' : ''}${voteCount > 0 ? ' pin--voted' : ''}${thumbUrl ? ' pin--photo' : ''}" style="--pin:${color};--pinv:${capped};--pinsz:${size}px">${badge}${photo}</span>`,
     iconSize: [box, box],
     iconAnchor: [box / 2, box / 2],
     popupAnchor: [0, -box / 2],
   })
+}
+
+// Tiny framed-thumbnail marker for a coordinate-only photo (spot_key null).
+function photoMarkerIcon(url: string): L.DivIcon {
+  return L.divIcon({
+    className: 'photopin-wrap',
+    html: `<span class="photopin"><img src="${escapeHtml(url)}" alt="" loading="lazy" /></span>`,
+    iconSize: [36, 36],
+    iconAnchor: [18, 18],
+    popupAnchor: [0, -18],
+  })
+}
+
+function photoMarkerPopupHtml(p: Photo, url: string): string {
+  return `<div class="pop pop--photo">
+    <a class="pop-photo" href="${escapeHtml(url)}" target="_blank" rel="noopener"><img src="${escapeHtml(url)}" alt="${escapeHtml(p.caption || 'Photo')}" /></a>
+    ${p.caption ? `<div class="pop-notes">${escapeHtml(p.caption)}</div>` : ''}
+    <div class="pop-cat mono">by ${escapeHtml(p.name || 'Someone')}</div>
+  </div>`
+}
+
+// The photo strip + upload control portaled into a spot popup's .photo-mount.
+// A live React child, so the strip refreshes as photos arrive.
+function SpotPhotos({
+  spotKey,
+  lat,
+  lng,
+  photos,
+  deviceId,
+  upload,
+  requestName,
+}: {
+  spotKey: string
+  lat: number
+  lng: number
+  photos: Photo[]
+  deviceId: string
+  upload: PhotosApi['upload']
+  requestName: (action: () => void) => void
+}) {
+  return (
+    <div className="spotphotos">
+      {photos.length > 0 && (
+        <div className="spotphotos-strip">
+          {photos.map((p) => {
+            const url = photoUrl(p.storage_path)
+            return (
+              <a
+                key={p.id}
+                className="spotphotos-thumb"
+                href={url}
+                target="_blank"
+                rel="noopener"
+                title={p.caption || `Photo by ${p.name || 'someone'}`}
+              >
+                <img src={url} alt={p.caption || `Photo by ${p.name || 'someone'}`} loading="lazy" />
+              </a>
+            )
+          })}
+        </div>
+      )}
+      <PhotoUpload
+        spotKey={spotKey}
+        lat={lat}
+        lng={lng}
+        deviceId={deviceId}
+        upload={upload}
+        requestName={requestName}
+        variant="inline"
+      />
+    </div>
+  )
 }
 
 function liveIcon(name: string, color: string, isMe: boolean): L.DivIcon {
@@ -108,6 +198,7 @@ function popupHtml(
   mine: boolean,
   voteConfigured: boolean,
   checkinConfigured: boolean,
+  photoConfigured: boolean,
 ): string {
   const dir = `https://www.google.com/maps/dir/?api=1&destination=${v.lat},${v.lng}`
   return `<div class="pop">
@@ -120,6 +211,7 @@ function popupHtml(
       <a class="pop-dir" href="${dir}" target="_blank" rel="noopener">Directions ↗</a>
     </div>
     ${checkinConfigured ? '<div class="checkin-mount"></div>' : ''}
+    ${photoConfigured ? '<div class="photo-mount"></div>' : ''}
   </div>`
 }
 
@@ -127,26 +219,39 @@ export default function MapView({
   live,
   votes,
   checkins,
+  photos,
+  focus,
+  onFocusConsumed,
 }: {
   live: LiveState
   votes: VotesApi
   checkins: CheckinsApi
+  photos: PhotosApi
+  focus?: MapFocus | null
+  onFocusConsumed?: () => void
 }) {
   const mapEl = useRef<HTMLDivElement>(null)
   const mapRef = useRef<L.Map | null>(null)
   const venueLayer = useRef<L.LayerGroup | null>(null)
   const presenceLayer = useRef<L.LayerGroup | null>(null)
+  const photoLayer = useRef<L.LayerGroup | null>(null)
   const liveLayer = useRef<L.LayerGroup | null>(null)
   const markers = useRef<Map<string, { marker: L.Marker; venue: Venue }>>(new Map())
 
   const [active, setActive] = useState<Set<VenueCategory>>(() => new Set(categoryOrder))
   const [topVoted, setTopVoted] = useState(false)
-  // The venue whose popup is open + the DOM node to portal the check-in button
-  // into. Cleared when the popup closes or the pin set is rebuilt.
-  const [openPopup, setOpenPopup] = useState<{ key: string; venue: Venue; node: HTMLElement } | null>(null)
+  // The venue whose popup is open + the DOM nodes to portal the check-in button
+  // and photo strip into. Cleared when the popup closes or pins are rebuilt.
+  const [openPopup, setOpenPopup] = useState<{
+    key: string
+    venue: Venue
+    checkinNode: HTMLElement | null
+    photoNode: HTMLElement | null
+  } | null>(null)
 
   const gate = useVoteGate(votes, live)
   const checkinGate = useNameGate(live)
+  const photoGate = useNameGate(live)
   const squads = useSquads()
   const { countFor, hasMine, configured: voteConfigured } = votes
 
@@ -175,12 +280,56 @@ export default function MapView({
     [visibleVenues, countFor, hasMine],
   )
 
+  // --- Photos: group by spot (newest-first — photos arrive desc by created) ---
+  const photosBySpot = useMemo(() => {
+    const m = new Map<string, Photo[]>()
+    for (const p of photos.photos) {
+      if (!p.spot_key) continue
+      const arr = m.get(p.spot_key) ?? []
+      arr.push(p)
+      m.set(p.spot_key, arr)
+    }
+    return m
+  }, [photos.photos])
+
+  // Photo-badge signature — changes when a visible pin gains/loses photos or its
+  // newest (thumbnail) photo changes, so we can refresh just the icons.
+  const photoSig = useMemo(
+    () =>
+      visibleVenues
+        .map((v) => {
+          const k = venueKey(v)
+          const arr = photosBySpot.get(k)
+          return `${k}:${arr && arr.length ? `${arr.length}_${arr[0].id}` : '0'}`
+        })
+        .join('|'),
+    [visibleVenues, photosBySpot],
+  )
+
+  // Coordinate-only photos (no spot) become their own tiny markers.
+  const coordPhotos = useMemo(
+    () => photos.photos.filter((p) => !p.spot_key && p.lat != null && p.lng != null),
+    [photos.photos],
+  )
+  const coordPhotoSig = useMemo(() => coordPhotos.map((p) => p.id).join('|'), [coordPhotos])
+
   // --- Presence: group fresh open check-ins by spot, resolve to coordinates ---
   const venueBySlug = useMemo(() => {
     const m = new Map<string, Venue>()
     for (const v of venues) m.set(v.slug, v)
     return m
   }, [])
+
+  // Coordinates to stamp on a "photo here" while checked in — the spot's own
+  // location for a curated venue, else the GPS fix recorded at check-in.
+  const myOpenCoords = useMemo(() => {
+    if (!myOpen) return null
+    if (myOpen.spot_key.startsWith('venue:')) {
+      const v = venueBySlug.get(myOpen.spot_key.slice('venue:'.length))
+      if (v) return { lat: v.lat, lng: v.lng }
+    }
+    return myOpen.lat != null && myOpen.lng != null ? { lat: myOpen.lat, lng: myOpen.lng } : null
+  }, [myOpen, venueBySlug])
 
   const presence = useMemo(() => {
     const now = Date.now()
@@ -229,6 +378,20 @@ export default function MapView({
   presenceRef.current = presence
   const venueBySlugRef = useRef(venueBySlug)
   venueBySlugRef.current = venueBySlug
+  const photoConfiguredRef = useRef(photos.configured)
+  photoConfiguredRef.current = photos.configured
+  const photosBySpotRef = useRef(photosBySpot)
+  photosBySpotRef.current = photosBySpot
+  const coordPhotosRef = useRef(coordPhotos)
+  coordPhotosRef.current = coordPhotos
+
+  // Build a venue's marker icon from the *current* vote count + newest photo
+  // thumbnail (both read via refs, so the imperative effects stay in sync).
+  const makeIcon = (v: Venue, key: string): L.DivIcon => {
+    const arr = photosBySpotRef.current.get(key)
+    const thumb = arr && arr.length ? photoUrl(arr[0].storage_path) : ''
+    return venueIcon(v.category, !!v.landmark, countForRef.current(key), thumb || undefined)
+  }
 
   // init map once
   useEffect(() => {
@@ -246,6 +409,7 @@ export default function MapView({
       maxZoom: 20,
     }).addTo(map)
     venueLayer.current = L.layerGroup().addTo(map)
+    photoLayer.current = L.layerGroup().addTo(map)
     presenceLayer.current = L.layerGroup().addTo(map)
     liveLayer.current = L.layerGroup().addTo(map)
     mapRef.current = map
@@ -263,14 +427,17 @@ export default function MapView({
     }
     el.addEventListener('click', onClick)
 
-    // Track which venue popup is open so we can portal the check-in button into
-    // its mount node. Presence / live-dot popups have no mount and are ignored.
+    // Track which venue popup is open so we can portal the check-in button +
+    // photo strip into its mount nodes. Presence / live-dot / photo-marker
+    // popups have no mounts and are ignored.
     const onPopupOpen = (e: L.PopupEvent) => {
-      const node = e.popup.getElement()?.querySelector('.checkin-mount') as HTMLElement | null
-      if (!node) return
+      const root = e.popup.getElement()
+      const checkinNode = (root?.querySelector('.checkin-mount') as HTMLElement | null) ?? null
+      const photoNode = (root?.querySelector('.photo-mount') as HTMLElement | null) ?? null
+      if (!checkinNode && !photoNode) return
       for (const [key, { marker, venue }] of markers.current) {
         if (marker.getPopup() === e.popup) {
-          setOpenPopup({ key, venue, node })
+          setOpenPopup({ key, venue, checkinNode, photoNode })
           return
         }
       }
@@ -300,13 +467,24 @@ export default function MapView({
       const count = countForRef.current(key)
       const mine = hasMineRef.current(key)
       const marker = L.marker([v.lat, v.lng], {
-        icon: venueIcon(v.category, !!v.landmark, count),
+        icon: makeIcon(v, key),
         title: v.name,
       })
-        .bindPopup(popupHtml(v, key, count, mine, voteConfiguredRef.current, checkinConfiguredRef.current))
+        .bindPopup(
+          popupHtml(
+            v,
+            key,
+            count,
+            mine,
+            voteConfiguredRef.current,
+            checkinConfiguredRef.current,
+            photoConfiguredRef.current,
+          ),
+        )
         .addTo(layer)
       markers.current.set(key, { marker, venue: v })
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [membershipKey])
 
   // Live vote updates: rescale/glow each pin and refresh any open popup in
@@ -315,18 +493,38 @@ export default function MapView({
     for (const [key, { marker, venue }] of markers.current) {
       const count = countForRef.current(key)
       const mine = hasMineRef.current(key)
-      marker.setIcon(venueIcon(venue.category, !!venue.landmark, count))
+      marker.setIcon(makeIcon(venue, key))
       if (marker.isPopupOpen()) {
         marker.setPopupContent(
-          popupHtml(venue, key, count, mine, voteConfiguredRef.current, checkinConfiguredRef.current),
+          popupHtml(
+            venue,
+            key,
+            count,
+            mine,
+            voteConfiguredRef.current,
+            checkinConfiguredRef.current,
+            photoConfiguredRef.current,
+          ),
         )
-        // setPopupContent replaced the popup DOM (including the check-in mount);
-        // re-point the portal at the fresh node so the button stays present.
-        const node = marker.getPopup()?.getElement()?.querySelector('.checkin-mount') as HTMLElement | null
-        if (node) setOpenPopup((prev) => (prev && prev.key === key ? { ...prev, node } : prev))
+        // setPopupContent replaced the popup DOM (including the mounts); re-point
+        // the portals at the fresh nodes so the controls stay present.
+        const root = marker.getPopup()?.getElement()
+        const checkinNode = (root?.querySelector('.checkin-mount') as HTMLElement | null) ?? null
+        const photoNode = (root?.querySelector('.photo-mount') as HTMLElement | null) ?? null
+        setOpenPopup((prev) => (prev && prev.key === key ? { ...prev, checkinNode, photoNode } : prev))
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voteSig])
+
+  // Live photo updates: refresh pin thumbnails without touching popup content
+  // (so an open popup's in-progress caption / strip isn't torn down).
+  useEffect(() => {
+    for (const [key, { marker, venue }] of markers.current) {
+      marker.setIcon(makeIcon(venue, key))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [photoSig])
 
   // Presence avatars beside spots with fresh open check-ins.
   useEffect(() => {
@@ -358,6 +556,34 @@ export default function MapView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [presenceSig])
+
+  // Coordinate-only photos: tiny framed-thumbnail markers with their own popup.
+  useEffect(() => {
+    const layer = photoLayer.current
+    if (!layer) return
+    layer.clearLayers()
+    for (const p of coordPhotosRef.current) {
+      const url = photoUrl(p.storage_path)
+      L.marker([p.lat as number, p.lng as number], {
+        icon: photoMarkerIcon(url),
+        zIndexOffset: 400,
+        title: p.caption || `Photo by ${p.name || 'someone'}`,
+      })
+        .bindPopup(photoMarkerPopupHtml(p, url))
+        .addTo(layer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coordPhotoSig])
+
+  // "Show on map" from the Pictures tab: fly to the photo's location on mount /
+  // whenever a new focus is requested (the `at` nonce forces a re-fly), then
+  // clear it so re-entering the Map tab doesn't re-fly to a stale spot.
+  useEffect(() => {
+    if (!focus || !mapRef.current) return
+    mapRef.current.flyTo([focus.lat, focus.lng], 17, { duration: 0.9 })
+    onFocusConsumed?.()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.at, focus?.lat, focus?.lng])
 
   // Leaving the Top-voted lens when the last vote is removed avoids a blank map.
   useEffect(() => {
@@ -446,9 +672,25 @@ export default function MapView({
       <div className="mapview-stage">
         <div ref={mapEl} className="leaflet-stage" role="application" aria-label="Map of San Diego venues and live attendee locations" />
         <SharePanel live={live} onRecenter={flyToMe} />
+
+        {/* Prominent "add a photo here" while checked in somewhere. */}
+        {photos.configured && myOpen && (
+          <div className="map-photo-fab">
+            <PhotoUpload
+              spotKey={myOpen.spot_key}
+              lat={myOpenCoords?.lat ?? null}
+              lng={myOpenCoords?.lng ?? null}
+              deviceId={live.myId}
+              upload={photos.upload}
+              requestName={photoGate.request}
+              variant="prominent"
+              label="Add a photo here"
+            />
+          </div>
+        )}
       </div>
 
-      {openPopup &&
+      {openPopup?.checkinNode &&
         createPortal(
           <CheckInButton
             spotKey={openPopup.key}
@@ -462,7 +704,21 @@ export default function MapView({
             checkOut={checkins.checkOut}
             requestName={checkinGate.request}
           />,
-          openPopup.node,
+          openPopup.checkinNode,
+        )}
+
+      {openPopup?.photoNode &&
+        createPortal(
+          <SpotPhotos
+            spotKey={openPopup.key}
+            lat={openPopup.venue.lat}
+            lng={openPopup.venue.lng}
+            photos={photos.photosFor(openPopup.key)}
+            deviceId={live.myId}
+            upload={photos.upload}
+            requestName={photoGate.request}
+          />,
+          openPopup.photoNode,
         )}
 
       <NamePrompt open={gate.promptOpen} onSave={gate.resolve} onCancel={gate.cancel} />
@@ -473,6 +729,14 @@ export default function MapView({
         title="Who’s checking in?"
         lede="Pick your name so the crew knows who’s where. Saved on this device only."
         cta="Save & check in"
+      />
+      <NamePrompt
+        open={photoGate.promptOpen}
+        onSave={photoGate.resolve}
+        onCancel={photoGate.cancel}
+        title="Who’s sharing this photo?"
+        lede="Pick your name so the crew knows whose shot this is. Saved on this device only."
+        cta="Save & continue"
       />
     </div>
   )
