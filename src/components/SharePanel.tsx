@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { LiveState } from '../lib/useLiveLocations'
 import { attendeeNames } from '../data/attendees'
+import { useAttendees } from '../lib/useSocial'
 
 export default function SharePanel({ live, onRecenter }: { live: LiveState; onRecenter: () => void }) {
   const [draft, setDraft] = useState(live.name)
@@ -8,6 +9,19 @@ export default function SharePanel({ live, onRecenter }: { live: LiveState; onRe
   const [open, setOpen] = useState(
     () => !(typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches),
   )
+
+  // Name suggestions derive from the live, editable roster when Supabase is on;
+  // otherwise fall back to the hardcoded crew list. Same UX either way — a
+  // dropdown of crew names via <datalist>.
+  const { configured: attendeesLive, attendees } = useAttendees()
+  const nameOptions = useMemo(() => {
+    if (attendeesLive && attendees.length) {
+      const uniq = Array.from(new Set(attendees.map((a) => a.name.trim()).filter(Boolean)))
+      const filtered = uniq.filter((n) => !/\+\d|Team|County/.test(n))
+      if (filtered.length) return filtered
+    }
+    return attendeeNames
+  }, [attendeesLive, attendees])
 
   const liveCount = live.others.length + (live.me ? 1 : 0)
 
@@ -46,7 +60,7 @@ export default function SharePanel({ live, onRecenter }: { live: LiveState; onRe
                 autoComplete="off"
               />
               <datalist id="crew-names">
-                {attendeeNames.map((n) => (
+                {nameOptions.map((n) => (
                   <option key={n} value={n} />
                 ))}
               </datalist>

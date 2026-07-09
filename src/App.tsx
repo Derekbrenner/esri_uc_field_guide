@@ -10,6 +10,7 @@ import CrewView from './components/CrewView'
 import ScoresView from './components/ScoresView'
 import SquadPanel from './components/SquadPanel'
 import Toasts from './components/Toasts'
+import { venues, venueKey } from './data/venues'
 import { CalendarIcon, CameraIcon, CompassIcon, CrewIcon, CupIcon, PinIcon, TrophyIcon } from './components/icons'
 
 const TABS = ['Guide', 'Map', 'Food & Drink', 'Pictures', 'Schedule', 'Crew', 'Scores'] as const
@@ -82,6 +83,18 @@ export default function App() {
     go('Map')
   }
 
+  // Resolve a schedule item's linked spot_key ('venue:<slug>' or a user-spot
+  // uuid) to coordinates, then fly the map there. Used by the Schedule tab.
+  const showSpotOnMap = (spotKey: string) => {
+    if (spotKey.startsWith('venue:')) {
+      const v = venues.find((vv) => venueKey(vv) === spotKey)
+      if (v) showOnMap(v.lat, v.lng)
+      return
+    }
+    const s = spots.spots.find((sp) => sp.id === spotKey)
+    if (s && s.lat != null && s.lng != null) showOnMap(s.lat, s.lng)
+  }
+
   const liveCount = live.others.length + (live.me ? 1 : 0)
   const showBadge = live.configured && liveCount > 0
 
@@ -131,8 +144,10 @@ export default function App() {
         )}
         {tab === 'Food & Drink' && <FoodView onNav={go} live={live} votes={votes} spots={spots} />}
         {tab === 'Pictures' && <PicturesView photos={photos} live={live} onShowOnMap={showOnMap} />}
-        {tab === 'Schedule' && <ScheduleView />}
-        {tab === 'Crew' && <CrewView />}
+        {tab === 'Schedule' && (
+          <ScheduleView live={live} onShowSpot={showSpotOnMap} userSpots={spots.spots} />
+        )}
+        {tab === 'Crew' && <CrewView live={live} />}
         {tab === 'Scores' && (
           <ScoresView
             checkins={checkins.checkins}

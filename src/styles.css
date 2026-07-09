@@ -761,6 +761,97 @@ a { color: var(--kelp); }
 .crew-arrow { color: var(--paper-faint); }
 
 /* ============================================================
+   EDITABLE CREW + SCHEDULE (Phase 8)
+   ============================================================ */
+
+/* small button variant for inline add/edit actions */
+.btn--sm { padding: 7px 14px; font-size: 13px; }
+
+/* header "+ add" button sits below the lede */
+.crew-add { margin-top: 4px; }
+
+/* standalone add form card (crew + schedule), full section width */
+.crew-add-panel {
+  max-width: var(--maxw);
+  margin: 0 auto 18px;
+  padding: 0 20px;
+}
+
+/* editable crew rows stack the main line over an "edited by" stamp */
+.crew-row--edit { flex-direction: column; align-items: stretch; gap: 4px; }
+.crew-row-main {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; flex-wrap: wrap;
+}
+.crew-row--form { display: block; padding: 12px 0; }
+.crew-edit-btn {
+  background: none; border: 1px solid var(--line-strong);
+  color: var(--paper-dim); border-radius: 999px;
+  padding: 4px 12px; min-height: 30px;
+  font-size: 12px; font-weight: 600; flex: 0 0 auto;
+  transition: border-color 0.15s, color 0.15s;
+}
+.crew-edit-btn:hover { border-color: var(--ping); color: var(--paper); }
+.crew-stamp { font-size: 10.5px; color: var(--paper-faint); letter-spacing: 0.02em; }
+
+/* shared edit-form layout */
+.eform { width: 100%; }
+.eform-grid { display: grid; grid-template-columns: 1fr; gap: 10px 12px; }
+.efield { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.efield--wide { grid-column: 1 / -1; }
+.efield-label {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--paper-faint);
+}
+.einput {
+  width: 100%;
+  background: var(--abyss);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--paper);
+  padding: 9px 11px;
+  min-height: 40px;
+  font-size: 14px;
+  font-family: var(--body);
+}
+.einput::placeholder { color: var(--paper-faint); }
+.einput:focus { outline: none; border-color: var(--ping); }
+select.einput { appearance: none; -webkit-appearance: none; cursor: pointer; }
+.einput[type='date'], .einput[type='number'] { font-family: var(--mono); }
+.eform-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.eform-remove { margin-left: auto; }
+.eform-actions .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* two columns for the roomy standalone add panel */
+@media (min-width: 620px) {
+  .crew-add-panel .eform-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* editable schedule items: title line + edit button + jump/stamp affordances */
+.sched-item { align-items: flex-start; }
+.sched-item .block-text { flex: 1; min-width: 0; }
+.block-item--form { display: block; }
+.sched-map {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-left: 8px; padding: 2px 9px;
+  background: color-mix(in srgb, var(--ping) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ping) 42%, transparent);
+  color: var(--ping); border-radius: 999px;
+  font-size: 11px; font-weight: 600; white-space: nowrap;
+  transition: background 0.15s;
+}
+.sched-map:hover { background: color-mix(in srgb, var(--ping) 26%, transparent); }
+.sched-stamp { margin-left: 8px; font-size: 10.5px; color: var(--paper-faint); }
+.sched-add-item {
+  background: none; border: 1px dashed var(--line-strong);
+  color: var(--paper-dim); border-radius: 8px;
+  padding: 6px 12px; margin-top: 10px;
+  font-size: 12px; font-weight: 600;
+  transition: border-color 0.15s, color 0.15s;
+}
+.sched-add-item:hover { border-color: var(--coral); color: var(--paper); }
+
+/* ============================================================
    CHECK-IN control (rendered into spot popups)
    ============================================================ */
 .checkin-mount:empty { display: none; }
